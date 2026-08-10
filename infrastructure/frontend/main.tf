@@ -9,8 +9,8 @@ data "google_project" "project" {
 
 resource "google_artifact_registry_repository" "frontend" {
   location      = var.region
-  repository_id = "${var.demo-name}-frontend"
-  description   = "Managed by Terraform - Do not manually edit - ${var.demo-name} frontend repository"
+  repository_id = "${var.demo-name}-holiday-frontend"
+  description   = "Managed by Terraform - Do not manually edit - ${var.demo-name} holiday frontend repository"
   format        = "DOCKER"
 
   docker_config {
@@ -26,8 +26,8 @@ resource "google_cloudbuild_trigger" "frontend" {
 
   project         = var.project
   location        = var.region
-  name            = "${var.demo-name}-frontend-build"
-  description     = "Managed by Terraform - Do not manually edit - ${var.demo-name} frontend image build"
+  name            = "${var.demo-name}-holiday-frontend-build"
+  description     = "Managed by Terraform - Do not manually edit - ${var.demo-name} holiday frontend image build"
   service_account = "projects/${var.project}/serviceAccounts/holiday-cloud-build-runner@${var.project}.iam.gserviceaccount.com"
 
   repository_event_config {
@@ -46,7 +46,7 @@ resource "google_cloudbuild_trigger" "frontend" {
     _GAR_REPOSITORY_ = google_artifact_registry_repository.frontend.repository_id
   }
 
-  filename = "frontend/cloudbuild.yaml"
+  filename = "submission_frontend/cloudbuild.yaml"
 
 }
 
@@ -58,9 +58,9 @@ resource "google_cloudbuild_trigger" "frontend" {
 
 # Create the Service Account to use with the Cloud Run service
 resource "google_service_account" "frontend-service-account" {
-  account_id   = "${substr(var.demo-name, 0, 17)}-frontend-sa"
-  display_name = "${substr(var.demo-name, 0, 17)} Frontend SA"
-  description  = "Service Account for the ${var.demo-name} Frontend Service"
+  account_id   = "${substr(var.demo-name, 0, 17)}-holiday-frontend-sa"
+  display_name = "${substr(var.demo-name, 0, 17)} holiday Frontend SA"
+  description  = "Service Account for the ${var.demo-name} holiday Frontend Service"
 }
 
 # Give the Service Account the Cloud Run Invoker role
@@ -88,7 +88,7 @@ resource "google_service_account_iam_member" "custom-cloud-run-sa-act-as-cloud-r
 resource "google_cloud_run_v2_service" "frontend-service" {
   provider     = google-beta
   launch_stage = "BETA"
-  name         = "${var.demo-name}-frontend"
+  name         = "${var.demo-name}-holiday-frontend"
   location     = var.region
   ingress      = "INGRESS_TRAFFIC_ALL"
   template {
