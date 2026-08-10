@@ -1,0 +1,20 @@
+# Cloud Build Pipeline Definition for Holiday Approval System
+steps:
+  # 1. Run Automated Evaluation Harness
+  - name: 'python:3.12-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install uv==0.8.13
+        uv run pytest holiday_approval_system/eval/
+
+  # 2. Deploy Leave Agent
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Deploying leave-agent to Agent Runtime..."
+
+timeout: '1200s'
