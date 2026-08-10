@@ -58,8 +58,8 @@ resource "google_cloudbuild_trigger" "frontend" {
 
 # Create the Service Account to use with the Cloud Run service
 resource "google_service_account" "frontend-service-account" {
-  account_id   = "${substr(var.demo-name, 0, 17)}-holiday-frontend-sa"
-  display_name = "${substr(var.demo-name, 0, 17)} holiday Frontend SA"
+  account_id   = "${substr(var.demo-name, 0, 9)}-holiday-frontend-sa"
+  display_name = "${substr(var.demo-name, 0, 9)} holiday Frontend SA"
   description  = "Service Account for the ${var.demo-name} holiday Frontend Service"
 }
 
