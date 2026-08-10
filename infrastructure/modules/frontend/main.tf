@@ -120,8 +120,8 @@ resource "google_cloud_run_v2_service" "frontend-service" {
       }
       resources {
         limits = {
-          cpu    = "8",
-          memory = "32Gi"
+          cpu    = "4",
+          memory = "4Gi"
         }
       }
     }
