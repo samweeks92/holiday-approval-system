@@ -1,5 +1,4 @@
 module "frontend" {
-
   # Set Source
   source = "./modules/frontend"
 
@@ -9,5 +8,14 @@ module "frontend" {
   project                     = var.project
   region                      = var.region
   demo-name                   = var.demo-name
+}
 
+module "pubsub" {
+  # Set Source
+  source = "./modules/pubsub"
+
+  project          = var.project
+  region           = var.region
+  demo-name        = var.demo-name
+  agent-runtime-id = var.agent-runtime-id
 }

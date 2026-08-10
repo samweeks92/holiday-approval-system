@@ -29,3 +29,9 @@ variable "tf-parallelism" {
   type        = string
   description = "The parallelism level for Terraform"
 }
+
+variable "agent-runtime-id" {
+  type        = string
+  description = "Deployed Agent Runtime Reasoning Engine ID"
+  default     = "6128897715548979200"
+}

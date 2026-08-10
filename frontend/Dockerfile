@@ -1,34 +1,12 @@
-# Build Stage
-FROM node:20-slim AS build
+FROM python:3.12-slim
 
-WORKDIR /app/ui
-COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
+WORKDIR /code
 
-COPY ui/ .
-RUN npm run build
+RUN pip install --no-cache-dir \
+    fastapi uvicorn google-adk google-cloud-aiplatform sse-starlette pydantic requests google-auth
 
-# Production Stage
-FROM python:3.11-slim
+COPY main.py .
 
-WORKDIR /app
-
-# Install dependencies
-COPY api/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy backend code
-COPY api/ .
-
-# Copy built frontend assets
-COPY --from=build /app/ui/dist ./static
-
-# Expose port
 EXPOSE 8080
 
-# Environment variables (Defaults, override in Cloud Run)
-ENV PORT=8080
-ENV HOST=0.0.0.0
-
-# Run application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

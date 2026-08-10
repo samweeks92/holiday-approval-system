@@ -1,0 +1,39 @@
+[
+  {
+    "id": "tc-1",
+    "description": "Standard 3-day holiday request under policy threshold",
+    "input": {
+      "days": 3,
+      "employee": "Bob",
+      "department": "Engineering",
+      "reason": "Family trip to mountains"
+    },
+    "expected_route": "auto_approve",
+    "expected_status": "APPROVED"
+  },
+  {
+    "id": "tc-2",
+    "description": "7-day holiday request exceeding 5 days threshold requiring manager approval",
+    "input": {
+      "days": 7,
+      "employee": "Alice",
+      "department": "Sales",
+      "reason": "Summer vacation"
+    },
+    "expected_route": "review",
+    "expected_status": "MANUAL_REVIEW"
+  },
+  {
+    "id": "tc-3",
+    "description": "Holiday request containing sensitive medical notes requiring PII redaction",
+    "input": {
+      "days": 2,
+      "employee": "Charlie",
+      "department": "HR",
+      "reason": "Doctor note medical surgery hospital stay SSN 123-45-6789"
+    },
+    "expected_route": "auto_approve",
+    "expected_status": "APPROVED",
+    "pii_check": "[REDACTED_MEDICAL_INFO]"
+  }
+]

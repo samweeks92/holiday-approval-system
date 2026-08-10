@@ -6,7 +6,7 @@ steps:
   args: [ 'push', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend']
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   entrypoint: gcloud
-  args: ['run', 'deploy', '$_DEMO_NAME_-frontend', '--image', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend', '--region', '$_REGION_']
+  args: ['run', 'deploy', '$_DEMO_NAME_-holiday-frontend', '--image', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend', '--region', '$_REGION_', '--memory', '1Gi', '--allow-unauthenticated']
 options:
   logging: CLOUD_LOGGING_ONLY
 images:
