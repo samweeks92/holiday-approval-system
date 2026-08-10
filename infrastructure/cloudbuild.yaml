@@ -7,7 +7,7 @@ steps:
       - |-      
         # Init and Apply Terraform
         terraform init -backend-config=bucket=$_TF_STATE_BUCKET_NAME_
-        terraform apply -parallelism=$_TF_PARALLELISM_ -var github-host-connection-name=$_GITHUB_HOST_CONNECTION_NAME_ -var github-repo-name=$_GITHUB_REPO_NAME_ -var project=$_PROJECT_ID_ -var region=$_REGION_ -var demo-name=$_DEMO_NAME_ -var enable-iap=$_ENABLE_IAP_ -var frontend-accessors=$_FRONTEND_ACCESSORS_ -var vpc-name=$_VPC_NAME_ -var subnet-name=$_SUBNET_NAME_ -var vpc-subnet-cidr-range=$_VPC_SUBNET_CIDR_RANGE_ -var vpc-access-connector-name=$_VPC_ACCESS_CONNECTOR_NAME_ -var vpc-access-connector-cidr-range=$_VPC_ACCESS_CONNECTOR_CIDR_RANGE_ -var tf-parallelism=$_TF_PARALLELISM_ -auto-approve
+        terraform apply -parallelism=$_TF_PARALLELISM_ -var github-host-connection-name=$_GITHUB_HOST_CONNECTION_NAME_ -var github-repo-name=$_GITHUB_REPO_NAME_ -var project=$_PROJECT_ID_ -var region=$_REGION_ -var demo-name=$_DEMO_NAME_ -var tf-parallelism=$_TF_PARALLELISM_ -auto-approve
 options:
   logging: CLOUD_LOGGING_ONLY
 timeout: 3600s
