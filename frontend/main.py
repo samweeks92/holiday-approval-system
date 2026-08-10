@@ -49,7 +49,7 @@ CACHE_LOCK = asyncio.Lock()
 async def refresh_pending_cache():
     """Fetches sessions in parallel across user_ids and updates the in-memory pending approvals cache."""
     global CACHED_PENDING_APPROVALS
-    target_users = ["default-user", "cli-user"]
+    target_users = ["vais-query-reasoning-engine", "default-user", "cli-user"]
     pending_approvals = []
     seen_sessions = set()
 
