@@ -37,7 +37,7 @@ resource "google_cloudbuild_trigger" "frontend" {
     }
   }
 
-  included_files = ["submission_frontend/**"]
+  included_files = ["frontend/**"]
 
   substitutions = {
     _PROJECT_ID_     = var.project
@@ -46,7 +46,7 @@ resource "google_cloudbuild_trigger" "frontend" {
     _GAR_REPOSITORY_ = google_artifact_registry_repository.frontend.repository_id
   }
 
-  filename = "submission_frontend/cloudbuild.yaml"
+  filename = "frontend/cloudbuild.yaml"
 
 }
 
