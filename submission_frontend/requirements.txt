@@ -1,0 +1,15 @@
+# Core SDK for Vertex AI and Agent Engine
+# The [agent_engines,adk] extras install the necessary sub-dependencies 
+# for the Agent Engine runtime and the ADK framework.
+google-cloud-aiplatform[adk,agent-engines]>=1.154.0,<2.0.0
+google-adk>=1.34.1,<2.0.0
+
+# Recommended for structured logging in Cloud Logging
+google-cloud-logging
+
+# Common dependencies for Agent logic (Add your specific ones below)
+python-dotenv>=1.0.1
+pydantic>=2.11.3
+pandas>=2.3.0
+requests
+cloudpickle>=3.1.2

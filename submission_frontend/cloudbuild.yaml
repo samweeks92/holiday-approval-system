@@ -1,0 +1,13 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  dir: 'frontend'
+  args: [ 'build', '-t', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend', '.' ]
+- name: 'gcr.io/cloud-builders/docker'
+  args: [ 'push', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args: ['run', 'deploy', '$_DEMO_NAME_-frontend', '--image', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend', '--region', '$_REGION_']
+options:
+  logging: CLOUD_LOGGING_ONLY
+images:
+- $_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend
