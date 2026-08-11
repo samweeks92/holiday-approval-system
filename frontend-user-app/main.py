@@ -578,7 +578,7 @@ async def serve_portal():
                     if (data.session_id) {
                         currentSessionId = data.session_id;
                     }
-                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\n/g, '<br>') + '</div>';
+                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.split('\\n').join('<br>') + '</div>';
                 } else {
                     chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 Message processed by LeaveFlow AI.</div>';
                 }
