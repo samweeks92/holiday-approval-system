@@ -43,16 +43,16 @@ The following Mermaid diagram illustrates the end-to-end architecture, graph flo
 
 ```mermaid
 graph TD
-    subgraph Client Layer
+    subgraph Clients["Client Layer"]
         UI_USER["🌴 Employee Portal (FastAPI / HTML5)<br>frontend-user-app/main.py"]
         UI_MGR["👨‍💼 Manager Portal (FastAPI)<br>frontend/main.py"]
     end
 
-    subgraph Vertex AI Agent Engine ("europe-west1")
-        ENGINE["Reasoning Engine ID: 6128897715548979200"]
+    subgraph Engine["Vertex AI Agent Engine (europe-west1)"]
+        ENGINE_NODE["Reasoning Engine ID: 6128897715548979200"]
         
-        subgraph ADK v2.0 Workflow Graph ("root_agent")
-            START(["START Node"])
+        subgraph Graph["ADK v2.0 Workflow Graph (root_agent)"]
+            START_NODE(["START Node"])
             GREETER["🤖 greeter_agent (gemini-2.5-flash)<br>mode='task' (Multi-turn autonomy)"]
             ROUTER{"🔀 Router Node<br>(Inspects vacation_details state)"}
             
@@ -64,19 +64,19 @@ graph TD
         end
     end
 
-    subgraph Data & Storage Layer
+    subgraph Data["Data & Storage Layer"]
         FIRESTORE[("🔥 Cloud Firestore<br>Database: holiday-data")]
         MEM_BANK[("🧠 Vertex AI Memory Bank<br>Personalized User Memories")]
         PUBSUB[("📡 Cloud Pub/Sub<br>Topic: vacation-requests")]
     end
 
     %% Client Interactions
-    UI_USER -->|"HTTP POST /api/chat"| ENGINE
+    UI_USER -->|"HTTP POST /api/chat"| ENGINE_NODE
     UI_USER -->|"HTTP POST /api/book"| PUBSUB
-    UI_MGR -->|"HTTP POST /api/manager/decision"| ENGINE
+    UI_MGR -->|"HTTP POST /api/action"| ENGINE_NODE
 
     %% Graph Flow
-    START --> GREETER
+    START_NODE --> GREETER
     GREETER --> ROUTER
     
     ROUTER -->|"not_enough_information"| GREETER

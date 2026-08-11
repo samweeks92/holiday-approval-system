@@ -3,12 +3,5 @@
   "deployment_target": "agent_runtime",
   "is_a2a": true,
   "agent_directory": "app",
-  "deployment_timestamp": "2026-08-11T15:02:44.091109+00:00",
-  "pending_operation": {
-    "operation_name": "projects/110071138645/locations/europe-west1/reasoningEngines/6128897715548979200/operations/6623940800046694400",
-    "project": "ai-sandbox-sw",
-    "location": "europe-west1",
-    "deployment_target": "agent_runtime",
-    "started_at": "2026-08-11T15:04:31.753451+00:00"
-  }
+  "deployment_timestamp": "2026-08-11T15:07:23.880855+00:00"
 }
