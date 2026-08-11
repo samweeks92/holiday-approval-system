@@ -209,6 +209,13 @@ resource "google_service_account_iam_member" "custom-cloud-run-sa-act-as-userapp
   member             = "serviceAccount:holiday-cloud-build-runner@${var.project}.iam.gserviceaccount.com"
 }
 
+resource "google_project_iam_member" "user_app_sa_vertex_ai_user" {
+  project = var.project
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.user_app_sa.email}"
+}
+
+
 # User Portal App Cloud Run Service
 resource "google_cloud_run_v2_service" "user_app_service" {
   provider     = google-beta
