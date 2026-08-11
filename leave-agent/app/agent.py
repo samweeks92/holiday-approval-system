@@ -27,6 +27,7 @@ from google.adk.events.event import Event, EventActions
 from google.adk.events.request_input import RequestInput
 from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankService
 from google.adk.memory.memory_entry import MemoryEntry
+from google.adk.tools.tool_context import ToolContext
 from google.adk.workflow import Workflow, node
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -64,7 +65,6 @@ class VacationEvaluation(BaseModel):
 
 
 # --- TOOLS ---
-
 def check_pto_balance(employee: str) -> str:
     """Checks available annual PTO vacation balance and used days for an employee (alice, bob, charlie)."""
     uid = normalize_user_id(employee)
@@ -109,6 +109,47 @@ async def save_vacation_memory(employee: str, memory_text: str) -> str:
         return f"Successfully saved memory to Vertex AI Memory Bank for {uid}: '{memory_text}'"
     except Exception as e:
         return f"Vertex AI Memory save notice for {uid}: {e}"
+    
+def save_vacation_details(
+    tool_context: ToolContext,
+    employee: str = None,
+    remaining_balance: float = None,
+    requested_days: float = None,
+    reason: str = None,
+    start_date: str = None
+) -> Dict[str, Any]:
+    """
+    Tool to record and save vacation details to state.
+
+    Args:
+        employee: The employee name to store in session state
+        requested_days: The number of days to store in session state
+        remaining_balance: The number of days remaining in the employee's PTO balance
+        reason: The reason for the vacation to store in session state
+        start_date: The start date of the vacation to store in session state
+    """
+
+    vacation_details = {
+        "employee":employee,
+        "remaining_balance":remaining_balance,
+        "requested_days":requested_days,
+        "reason":reason,
+        "start_date":start_date
+        
+    }
+    tool_context.state["vacation_details"] = vacation_details
+
+    return {"status": "success"}
+
+
+def retrieve_vacation_details(tool_context: ToolContext) -> Dict[str, Any]:
+    """
+    Tool to retrieve vacation details from session state.
+    """
+    # Read from session state
+    vacation_details = tool_context.state.get("vacation_details")
+
+    return vacation_details
 
 
 def approve_vacation_record(employee: str, days: float, reason: str, start_date: str) -> str:
@@ -127,51 +168,23 @@ def decline_vacation_record(employee: str, days: float, reason: str, start_date:
 
 
 # --- SUBAGENTS ---
-
-greet_agent = LlmAgent(
-    name="greet_agent",
-    model=MODEL,
-    instruction=(
-        "You are LeaveFlow AI, a warm, friendly, human-like AI holiday assistant. "
-        "At the start of a conversation or greeting, call `retrieve_user_memories(employee)` and `check_pto_balance(employee)`. "
-        "Greet the employee warmly by name. If past memories are found (e.g. Malaga, Rome, Spain), naturally ask them about their trip like a caring colleague (e.g. 'Hey Alice, so how was Malaga? Enough time to switch off?'). "
-        "Mention their available PTO balance and ask how you can help them today. Keep it conversational, warm, and natural."
-    ),
-    tools=[retrieve_user_memories, check_pto_balance],
-)
-
-
-process_vacation_agent = LlmAgent(
-    name="process_vacation_agent",
-    model=MODEL,
-    instruction=(
-        "You are an expert holiday request evaluation agent. "
-        "Analyze the user's message and determine if they are asking to book a NEW vacation or holiday request. "
-        "Call `check_pto_balance(employee)` to check the employee's available PTO balance. "
-        "Extract employee, user_id (alice, bob, charlie), requested days (float), start_date, and reason/destination. "
-        "Set `is_request=True` if the user is asking to book a new holiday. Set `is_request=False` if user is just greeting, thanking, or asking a question. "
-        "Set `decision` to:\n"
-        "- 'auto_approve' if requested days <= 5.0 and days <= remaining PTO balance.\n"
-        "- 'auto_decline' if requested days > remaining PTO balance.\n"
-        "- 'review' if requested days > 5.0 and days <= remaining PTO balance.\n"
-        "- 'none' if is_request is False."
-    ),
-    tools=[check_pto_balance],
-    output_schema=VacationEvaluation,
-)
-
-
-def route_vacation(node_input: Any) -> Event:
-    """Routes the workflow based on VacationEvaluation from process_vacation_agent."""
-    decision = "none"
-    if isinstance(node_input, VacationEvaluation):
-        decision = node_input.decision
-    elif isinstance(node_input, dict):
-        decision = node_input.get("decision", "none")
-
-    route_target = decision if decision in ("auto_approve", "auto_decline", "review", "none") else "none"
-    return Event(output=node_input, actions=EventActions(route=route_target))
-
+# process_vacation_agent = LlmAgent(
+#     name="process_vacation_agent",
+#     model=MODEL,
+#     instruction=(
+#         "You are an expert holiday request evaluation agent. "
+#         "Analyze the user's message and determine if they are asking to book a NEW vacation or holiday request. "
+#         "Call `check_pto_balance(employee)` to check the employee's available PTO balance. "
+#         "Extract employee, user_id (alice, bob, charlie), requested days (float), start_date, and reason/destination. "
+#         "Set `is_request=True` if the user is asking to book a new holiday. Set `is_request=False` if user is just greeting, thanking, or asking a question. "
+#         "Set `decision` to:\n"
+#         "- 'auto_approve' if requested days <= 5.0 and days <= remaining PTO balance.\n"
+#         "- 'auto_decline' if requested days > remaining PTO balance.\n"
+#         "- 'review' if requested days > 5.0 and days <= remaining PTO balance.\n"
+#     ),
+#     tools=[check_pto_balance],
+#     output_schema=VacationEvaluation,
+# )
 
 auto_approve_agent = LlmAgent(
     name="auto_approve_agent",
@@ -273,20 +286,55 @@ summarize_agent = LlmAgent(
 )
 
 
+greeter_agent = LlmAgent(
+    name="greeter_agent",
+    model=MODEL,
+    mode="task",
+    instruction=(
+        "You are LeaveFlow AI, a warm, friendly, human-like AI holiday assistant. "
+        "Call `retrieve_user_memories(employee)` and `check_pto_balance(employee)` to look up past notes and PTO balance.\n\n"
+        "1. Greet the employee warmly by name. If past memories are found (e.g. Malaga, Rome, Spain), naturally ask them about their trip like a caring colleague (e.g. 'Hey Alice, so how was Malaga? Enough time to switch off?').\n"
+        "2. Ensure to collect all details of the new vacation request (duration/days, start date, reason/destination).\n"
+        "3. After collecting all details of the new vacation request (duration/days, start date, reason/destination), use tools retrieve_vacation_details and save_vacation_details to save these details to session state"
+    ),
+    tools=[retrieve_user_memories, check_pto_balance, retrieve_vacation_details, save_vacation_details],
+)
+
+def router(ctx: Context, node_input: Any) -> Event:
+    """Routes the workflow based on vacation_details stored in session state."""
+    vacation_details = ctx.state.get("vacation_details") or {}
+    
+    # Check if any required field is missing or None
+    required_fields = ["employee", "remaining_balance", "requested_days", "reason", "start_date"]
+    if not vacation_details or any(vacation_details.get(field) is None for field in required_fields):
+        return Event(output=node_input, actions=EventActions(route="not_enough_information"))
+    
+    # Route based on days vs balance and 5-day threshold
+    requested_days = float(vacation_details["requested_days"])
+    remaining_balance = float(vacation_details["remaining_balance"])
+    
+    if requested_days > remaining_balance:
+        decision = "auto_decline"
+    elif requested_days > 5.0:
+        decision = "review"
+    else:
+        decision = "auto_approve"
+
+    return Event(output=node_input, actions=EventActions(route=decision))
+
 root_agent = Workflow(
-    name="vacation_workflow",
-    description="LeaveFlow AI ADK v2.0 graph workflow with specialized LLM subagent nodes, initial memory reading, intent classification, auto-approval/denial, human-in-the-loop review, and Vertex AI Memory Bank summarization.",
+    name="root_agent",
+    description="LeaveFlow AI ADK v2.0 graph workflow with specialized LlmAgent subagents, initial memory reading, intent classification, auto-approval/denial, human-in-the-loop review, and Vertex AI Memory Bank summarization.",
     edges=[
-        ("START", greet_agent),
-        (greet_agent, process_vacation_agent),
-        (process_vacation_agent, route_vacation),
+        ("START", greeter_agent),
+        (greeter_agent, router),
         (
-            route_vacation,
+            router,
             {
                 "auto_approve": auto_approve_agent,
                 "auto_decline": auto_decline_agent,
                 "review": review_agent,
-                "none": summarize_agent,
+                "not_enough_information": greeter_agent,
             },
         ),
         (auto_approve_agent, summarize_agent),
@@ -294,6 +342,8 @@ root_agent = Workflow(
         (review_agent, summarize_agent),
     ],
 )
+
+
 
 app = App(
     root_agent=root_agent,
