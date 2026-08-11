@@ -37,6 +37,7 @@ from app.firestore_db import (
     normalize_user_id,
     record_approved_vacation,
     record_denied_vacation,
+    record_pending_vacation,
 )
 
 # Configure Structured JSON Logging
@@ -49,7 +50,6 @@ AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "6128897715548979200").split
 
 
 def log_structured(event_type: str, intent: str, outcome: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
-    """Outputs structured JSON logs capturing INTENT before execution and OUTCOME after execution."""
     log_entry = {
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "event_type": event_type,
@@ -61,7 +61,6 @@ def log_structured(event_type: str, intent: str, outcome: Optional[str] = None, 
 
 
 def sanitize_pii_text(text: str) -> str:
-    """Active PII Redaction Scrubbing Pipeline."""
     if not text:
         return text
     text = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[REDACTED_SSN]", text)
@@ -121,7 +120,6 @@ PRO_MODEL = Gemini(model="gemini-2.5-pro")
 
 
 class LeaveRequest(BaseModel):
-    """Schema representing an employee holiday/leave request."""
     employee: str = Field("Alice Smith", description="Name or ID of requesting employee (Alice, Bob, Charlie).")
     days: float = Field(..., description="Total number of business days requested.")
     start_date: str = Field("2026-06-01", description="Leave start date (YYYY-MM-DD).")
@@ -131,10 +129,6 @@ class LeaveRequest(BaseModel):
 
 
 def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
-    """
-    Parses incoming leave submission, retrieves user memories from Vertex AI Memory Bank,
-    checks PTO balance, and routes execution.
-    """
     days = 1.0
     reason = "Vacation"
     employee = "Alice Smith"
@@ -173,20 +167,16 @@ def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
             clean_lower = text_input.strip().lower()
             uid = normalize_user_id(text_input)
             
-            # Retrieve memories from Vertex AI Memory Bank
             mems = get_vertex_memories_sync(uid)
             
-            if any(g in clean_lower for g in ["hello", "hi", "hey", "greetings"]):
-                destination_mention = ""
-                for m in mems:
-                    match_dest = re.search(r"vacation to ([a-zA-Z\s]+)", m, re.IGNORECASE)
-                    if match_dest:
-                        destination_mention = match_dest.group(1).strip()
-                        break
+            # Smart Greeting with Memory
+            if any(g in clean_lower for g in ["hi", "hello", "hey", "greetings"]):
+                memory_snippet = ""
+                if mems:
+                    latest_mem = mems[0]
+                    memory_snippet = f" I remember your previous note: '{latest_mem}'."
 
-                greeting_msg = f"Hello {uid.capitalize()}! Welcome back to LeaveFlow AI."
-                if destination_mention:
-                    greeting_msg = f"Hello {uid.capitalize()}! Welcome back. How was your vacation to {destination_mention}?"
+                greeting_msg = f"Hi {uid.capitalize()}!{memory_snippet} How can I help you today?"
 
                 return Event(
                     output={"greeting": greeting_msg, "vertex_memories": mems},
@@ -202,10 +192,8 @@ def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
     sanitized_reason = sanitize_pii_text(reason)
     uid = normalize_user_id(employee)
 
-    # Fetch existing Vertex AI Memories
     vertex_memories = get_vertex_memories_sync(uid)
 
-    # PTO Balance Validation
     balance_record = get_employee_balance(uid)
     remaining_balance = float(balance_record.get("remaining_balance", 25.0))
 
@@ -224,7 +212,6 @@ def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
     req_data["vertex_memories"] = vertex_memories
 
     if days > remaining_balance:
-        # Save Denied Memory to Vertex AI Memory Bank
         save_vertex_memory_sync(uid, f"{curr_employee_name} requested {days} days vacation for {sanitized_reason} (Denied - Insufficient Balance)")
         record_denied_vacation(curr_employee_name, days, sanitized_reason, start_date)
         return Event(
@@ -240,6 +227,8 @@ def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
             state={"leave_request": req_data},
         )
 
+    # > 5 days -> Record pending in Firestore and route to manager review
+    record_pending_vacation(curr_employee_name, days, sanitized_reason, start_date)
     return Event(
         output=req_data,
         route="review",
@@ -248,7 +237,6 @@ def _process_leave_request_impl(ctx: Context, node_input: Any) -> Event:
 
 
 def _auto_approve_impl(ctx: Context, node_input: Any) -> Event:
-    """Automatically approves leave requests <= 5 days and saves memory to Vertex AI Memory Bank."""
     req_dict = node_input if isinstance(node_input, dict) else (ctx.state.get("leave_request", {}) if ctx and hasattr(ctx, "state") else {})
     days = req_dict.get("days", 1.0)
     reason = req_dict.get("reason", "Vacation")
@@ -256,11 +244,9 @@ def _auto_approve_impl(ctx: Context, node_input: Any) -> Event:
     start_date = req_dict.get("start_date", "2026-06-01")
     uid = normalize_user_id(employee)
 
-    # Update Firestore Balance
     updated_rec = record_approved_vacation(employee, days, reason, start_date)
     new_rem = updated_rec.get("remaining_balance", 24.0)
 
-    # Save Memory directly to Vertex AI Memory Bank
     save_vertex_memory_sync(uid, f"{employee} booked a {days}-day vacation to {reason}")
 
     summary = (
@@ -291,7 +277,6 @@ def _auto_approve_impl(ctx: Context, node_input: Any) -> Event:
 
 
 def _auto_deny_impl(ctx: Context, node_input: Any) -> Event:
-    """Automatically denies leave requests where requested days > remaining PTO balance."""
     req_dict = node_input if isinstance(node_input, dict) else (ctx.state.get("leave_request", {}) if ctx and hasattr(ctx, "state") else {})
     days = req_dict.get("days", 10.0)
     reason = req_dict.get("reason", "Vacation")
@@ -367,7 +352,6 @@ async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, Non
         status = "APPROVED"
         updated_rec = record_approved_vacation(employee, days, reason, start_date)
         new_rem = updated_rec.get("remaining_balance", 18.0)
-        # Save Memory directly to Vertex AI Memory Bank
         save_vertex_memory_sync(uid, f"{employee} booked a {days}-day vacation to {reason}")
         summary = f"Holiday request of {days} day(s) for '{reason}' by {employee} WAS APPROVED by manager review. Remaining balance: {new_rem} days."
     else:

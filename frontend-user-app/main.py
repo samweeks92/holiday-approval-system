@@ -33,6 +33,7 @@ PUBSUB_TOPIC_NAME = os.environ.get("PUBSUB_TOPIC", "holiday-approval-system-holi
 
 class ChatRequest(BaseModel):
     user_id: str
+    session_id: Optional[str] = None
     message: str
 
 
@@ -55,7 +56,6 @@ def get_auth_headers() -> Dict[str, str]:
 
 
 def fetch_vertex_memories(user_id: str) -> List[str]:
-    """Retrieves memories for user from Vertex AI Memory Bank via Python ADK or Firestore fallback."""
     try:
         from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankService
         clean_id = AGENT_ENGINE_ID.split("/")[-1]
@@ -79,7 +79,7 @@ def fetch_vertex_memories(user_id: str) -> List[str]:
         loop.close()
         if mems:
             return mems
-    except Exception as err:
+    except Exception:
         pass
 
     return get_user_memories(user_id)
@@ -133,10 +133,13 @@ async def chat_with_agent(req: ChatRequest):
     stream_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/{AGENT_ENGINE_ID}:streamQuery"
     headers = get_auth_headers()
 
+    sid = req.session_id or f"session-{uid}-{os.urandom(4).hex()}"
+
     payload = {
         "class_method": "async_stream_query",
         "input": {
             "user_id": uid,
+            "session_id": sid,
             "message": {
                 "role": "user",
                 "parts": [{"text": req.message}]
@@ -162,13 +165,15 @@ async def chat_with_agent(req: ChatRequest):
                 except json.JSONDecodeError:
                     continue
 
-        if not agent_reply.strip():
-            agent_reply = f"Hello {uid.capitalize()}! Your request has been received and processed by LeaveFlow AI."
-
         vertex_memories = fetch_vertex_memories(uid)
+
+        if not agent_reply.strip():
+            m_snippet = f" I remember your previous note: '{vertex_memories[0]}'." if vertex_memories else ""
+            agent_reply = f"Hi {uid.capitalize()}!{m_snippet} How can I help you today?"
 
         return {
             "status": "success",
+            "session_id": sid,
             "reply": agent_reply.strip(),
             "vertex_memories": vertex_memories
         }
@@ -282,7 +287,6 @@ async def serve_portal():
             margin-bottom: 20px;
         }
 
-        /* Chat Window Styling */
         .chat-box {
             height: 380px;
             overflow-y: auto;
@@ -320,10 +324,7 @@ async def serve_portal():
             box-shadow: 0 2px 8px rgba(0,0,0,0.03);
         }
 
-        .chat-input-row {
-            display: flex;
-            gap: 12px;
-        }
+        .chat-input-row { display: flex; gap: 12px; }
 
         input[type="text"], input[type="date"], select {
             width: 100%;
@@ -348,9 +349,19 @@ async def serve_portal():
             white-space: nowrap;
         }
 
-        .btn-send:hover { transform: translateY(-1px); }
+        .btn-new-chat {
+            background: #f1f5f9;
+            color: var(--text-dark);
+            border: 1px solid var(--border-light);
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
 
-        /* Memories Section */
+        .btn-new-chat:hover { background: var(--ocean-light); color: var(--primary-blue); }
+
         .memory-section {
             background: #f0f9ff;
             border: 1px solid #bae6fd;
@@ -427,8 +438,11 @@ async def serve_portal():
             <div>
                 <div class="card">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-                        <div style="font-size: 18px; font-weight: 700;">💬 Interactive AI Agent Chat</div>
-                        <div style="width: 200px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div style="font-size: 18px; font-weight: 700;">💬 Interactive AI Agent Chat</div>
+                            <button class="btn-new-chat" onclick="startNewChat()">➕ New Chat Session</button>
+                        </div>
+                        <div style="width: 180px;">
                             <select id="user-select-chat" onchange="switchUser()">
                                 <option value="alice">Alice Smith (alice)</option>
                                 <option value="bob">Bob Jones (bob)</option>
@@ -438,13 +452,13 @@ async def serve_portal():
                     </div>
 
                     <div class="chat-box" id="chat-stream">
-                        <div class="msg-bubble msg-agent">
-                            🤖 Hello! I am LeaveFlow AI. Ask me about your PTO balance, or submit a vacation request directly in chat!
+                        <div class="msg-bubble msg-agent" id="initial-agent-msg">
+                            🤖 Hello! I am LeaveFlow AI.
                         </div>
                     </div>
 
                     <div class="chat-input-row">
-                        <input type="text" id="chat-input" placeholder="e.g. Hello! Requesting 3 days leave for Malaga beach trip" onkeypress="if(event.key==='Enter') sendChat()">
+                        <input type="text" id="chat-input" placeholder="e.g. Hi! Requesting 3 days leave for Malaga beach trip" onkeypress="if(event.key==='Enter') sendChat()">
                         <button class="btn-send" onclick="sendChat()">Send Message</button>
                     </div>
 
@@ -526,6 +540,7 @@ async def serve_portal():
 
     <script>
         let currentUserId = 'charlie';
+        let currentSessionId = 'session-' + currentUserId + '-' + Date.now();
 
         function calcDays() {
             const start = new Date(document.getElementById('start-date').value);
@@ -537,16 +552,43 @@ async def serve_portal():
             }
         }
 
+        function startNewChat() {
+            currentSessionId = 'session-' + currentUserId + '-' + Date.now();
+            const chatStream = document.getElementById('chat-stream');
+            chatStream.innerHTML = '<div class="msg-bubble msg-agent">🤖 New session started! Sending hello...</div>';
+            sendInitialGreeting();
+        }
+
         function switchUser() {
             currentUserId = document.getElementById('user-select-chat').value;
             document.getElementById('user-select-manual').value = currentUserId;
+            startNewChat();
             loadUserData();
         }
 
         function syncManualUser() {
             currentUserId = document.getElementById('user-select-manual').value;
             document.getElementById('user-select-chat').value = currentUserId;
+            startNewChat();
             loadUserData();
+        }
+
+        async function sendInitialGreeting() {
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUserId, session_id: currentSessionId, message: 'hi' })
+                });
+                const data = await res.json();
+                const chatStream = document.getElementById('chat-stream');
+                if (data.status === 'success' && data.reply) {
+                    chatStream.innerHTML = '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\\n/g, '<br>') + '</div>';
+                    renderMemories(data.vertex_memories || []);
+                }
+            } catch (err) {
+                console.error('Greeting error:', err);
+            }
         }
 
         async function loadUserData() {
@@ -606,14 +648,14 @@ async def serve_portal():
                 const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: currentUserId, message: msg })
+                    body: JSON.stringify({ user_id: currentUserId, session_id: currentSessionId, message: msg })
                 });
                 const data = await res.json();
                 if (data.status === 'success' && data.reply) {
                     chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\\n/g, '<br>') + '</div>';
                     renderMemories(data.vertex_memories || []);
                 } else {
-                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">⚠️ Response received from LeaveFlow AI.</div>';
+                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 Request received and processed by LeaveFlow AI.</div>';
                 }
                 chatStream.scrollTop = chatStream.scrollHeight;
                 loadUserData();
@@ -656,6 +698,7 @@ async def serve_portal():
         }
 
         loadUserData();
+        sendInitialGreeting();
         setInterval(loadUserData, 4000);
     </script>
 </body>
