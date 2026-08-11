@@ -77,8 +77,15 @@ def attach_reasoning_engine_routes(app: FastAPI) -> None:
 
     @app.post("/api/stream_reasoning_engine")
     async def stream_query(request: Request) -> responses.StreamingResponse:
-        body = await request.json()
-        method = resolve_method(body["class_method"], streaming=True)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+
+        class_method = body.get("class_method", "async_stream_query")
+        method = resolve_method(class_method, streaming=True)
 
         async def generator():
             async for event in method(**(body.get("input") or {})):
@@ -90,8 +97,15 @@ def attach_reasoning_engine_routes(app: FastAPI) -> None:
 
     @app.post("/api/reasoning_engine")
     async def query(request: Request) -> responses.JSONResponse:
-        body = await request.json()
-        method = resolve_method(body["class_method"], streaming=False)
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                body = {}
+        except Exception:
+            body = {}
+
+        class_method = body.get("class_method", "async_query")
+        method = resolve_method(class_method, streaming=False)
         kwargs = body.get("input") or {}
         output = (
             await method(**kwargs)
