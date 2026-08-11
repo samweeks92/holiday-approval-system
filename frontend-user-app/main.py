@@ -1,5 +1,5 @@
 # Copyright 2026 Google LLC
-# LeaveFlow AI - Employee Portal with Live Chat & Manual Booking
+# LeaveFlow AI - Employee Portal with Live Conversational Chat & Manual Booking
 
 import asyncio
 import json
@@ -168,8 +168,7 @@ async def chat_with_agent(req: ChatRequest):
         vertex_memories = fetch_vertex_memories(uid)
 
         if not agent_reply.strip():
-            m_snippet = f" I remember your previous note: '{vertex_memories[0]}'." if vertex_memories else ""
-            agent_reply = f"Hi {uid.capitalize()}!{m_snippet} How can I help you today?"
+            agent_reply = f"Hello {uid.capitalize()}! I am LeaveFlow AI. How can I help you with your holiday requests today?"
 
         return {
             "status": "success",
@@ -301,7 +300,7 @@ async def serve_portal():
         }
 
         .msg-bubble {
-            max-width: 80%;
+            max-width: 85%;
             padding: 12px 16px;
             border-radius: 16px;
             font-size: 14px;
@@ -452,13 +451,13 @@ async def serve_portal():
                     </div>
 
                     <div class="chat-box" id="chat-stream">
-                        <div class="msg-bubble msg-agent" id="initial-agent-msg">
-                            🤖 Hello! I am LeaveFlow AI.
+                        <div class="msg-bubble msg-agent">
+                            🤖 Hi! I am LeaveFlow AI. Type a message or greeting to start chatting!
                         </div>
                     </div>
 
                     <div class="chat-input-row">
-                        <input type="text" id="chat-input" placeholder="e.g. Hi! Requesting 3 days leave for Malaga beach trip" onkeypress="if(event.key==='Enter') sendChat()">
+                        <input type="text" id="chat-input" placeholder="e.g. Hi! Can you help me book another holiday to Spain?" onkeypress="if(event.key==='Enter') sendChat()">
                         <button class="btn-send" onclick="sendChat()">Send Message</button>
                     </div>
 
@@ -555,8 +554,7 @@ async def serve_portal():
         function startNewChat() {
             currentSessionId = 'session-' + currentUserId + '-' + Date.now();
             const chatStream = document.getElementById('chat-stream');
-            chatStream.innerHTML = '<div class="msg-bubble msg-agent">🤖 New session started! Sending hello...</div>';
-            sendInitialGreeting();
+            chatStream.innerHTML = '<div class="msg-bubble msg-agent">🤖 New session started with LeaveFlow AI. Say hi to start!</div>';
         }
 
         function switchUser() {
@@ -571,24 +569,6 @@ async def serve_portal():
             document.getElementById('user-select-chat').value = currentUserId;
             startNewChat();
             loadUserData();
-        }
-
-        async function sendInitialGreeting() {
-            try {
-                const res = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_id: currentUserId, session_id: currentSessionId, message: 'hi' })
-                });
-                const data = await res.json();
-                const chatStream = document.getElementById('chat-stream');
-                if (data.status === 'success' && data.reply) {
-                    chatStream.innerHTML = '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\\n/g, '<br>') + '</div>';
-                    renderMemories(data.vertex_memories || []);
-                }
-            } catch (err) {
-                console.error('Greeting error:', err);
-            }
         }
 
         async function loadUserData() {
@@ -698,7 +678,6 @@ async def serve_portal():
         }
 
         loadUserData();
-        sendInitialGreeting();
         setInterval(loadUserData, 4000);
     </script>
 </body>

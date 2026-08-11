@@ -520,24 +520,44 @@ async def serve_dashboard(request: Request):
                 const container = document.getElementById('pending-container');
 
                 if (data.status === 'success' && data.pending && data.pending.length > 0) {
-                    container.innerHTML = data.pending.map(p => '<div class="approval-card">' +
-                        '<div style="flex:1;">' +
-                            '<span class="badge-pending">⚠️ MANAGER REVIEW REQUIRED</span>' +
-                            '<div style="font-size:18px; font-weight:600; margin-bottom:6px;">' + p.employee + ' (' + (p.department || 'Engineering') + ') &mdash; ' + p.days + ' Days Requested</div>' +
-                            '<div style="font-size:14px; color:var(--text-muted); margin-bottom:8px;"><strong>Reason:</strong> ' + p.reason + '</div>' +
-                            '<div style="font-size:12px; color:#64748b;">🆔 Session / Entry: ' + p.session_id + ' | 👤 User: ' + p.user_id + '</div>' +
-                        '</div>' +
-                        '<div style="display:flex; gap:12px;">' +
-                            '<button class="btn btn-approve" onclick="takeAction(\'' + p.session_id + '\', \'' + p.user_id + '\', \'' + p.interrupt_id + '\', true, ' + p.days + ', \'' + p.reason.replace(/'/g, "\\'") + '\')">✅ Approve Vacation</button>' +
-                            '<button class="btn btn-reject" onclick="takeAction(\'' + p.session_id + '\', \'' + p.user_id + '\', \'' + p.interrupt_id + '\', false, ' + p.days + ', \'' + p.reason.replace(/'/g, "\\'") + '\')">❌ Reject</button>' +
-                        '</div>' +
-                    '</div>').join('');
+                    container.innerHTML = data.pending.map(p => {
+                        const safeEmp = (p.employee || 'Employee').replace(/"/g, '&quot;');
+                        const safeReason = (p.reason || 'Vacation Request').replace(/"/g, '&quot;');
+                        const safeDept = (p.department || 'Engineering').replace(/"/g, '&quot;');
+                        const sid = (p.session_id || '').replace(/"/g, '&quot;');
+                        const uid = (p.user_id || '').replace(/"/g, '&quot;');
+                        const iid = (p.interrupt_id || 'manager_review').replace(/"/g, '&quot;');
+                        const days = p.days || 6.0;
+
+                        return '<div class="approval-card">' +
+                            '<div style="flex:1;">' +
+                                '<span class="badge-pending">⚠️ MANAGER REVIEW REQUIRED</span>' +
+                                '<div style="font-size:18px; font-weight:600; margin-bottom:6px;">' + safeEmp + ' (' + safeDept + ') &mdash; ' + days + ' Days Requested</div>' +
+                                '<div style="font-size:14px; color:var(--text-muted); margin-bottom:8px;"><strong>Reason:</strong> ' + safeReason + '</div>' +
+                                '<div style="font-size:12px; color:#64748b;">🆔 Session / Entry: ' + sid + ' | 👤 User: ' + uid + '</div>' +
+                            '</div>' +
+                            '<div style="display:flex; gap:12px;">' +
+                                '<button class="btn btn-approve" data-sid="' + sid + '" data-uid="' + uid + '" data-iid="' + iid + '" data-approved="true" data-days="' + days + '" data-reason="' + safeReason + '" onclick="handleActionClick(this)">✅ Approve Vacation</button>' +
+                                '<button class="btn btn-reject" data-sid="' + sid + '" data-uid="' + uid + '" data-iid="' + iid + '" data-approved="false" data-days="' + days + '" data-reason="' + safeReason + '" onclick="handleActionClick(this)">❌ Reject</button>' +
+                            '</div>' +
+                        '</div>';
+                    }).join('');
                 } else {
                     container.innerHTML = '<div class="empty-state"><div style="font-size:48px;">🏖️</div><h3>No Pending Approvals</h3><p style="margin-top:4px;">All submitted holiday requests are processed or within policy thresholds.</p></div>';
                 }
             } catch (err) {
                 console.error('Error fetching pending approvals:', err);
             }
+        }
+
+        function handleActionClick(btn) {
+            const sid = btn.getAttribute('data-sid');
+            const uid = btn.getAttribute('data-uid');
+            const iid = btn.getAttribute('data-iid');
+            const approved = btn.getAttribute('data-approved') === 'true';
+            const days = parseFloat(btn.getAttribute('data-days')) || 1.0;
+            const reason = btn.getAttribute('data-reason');
+            takeAction(sid, uid, iid, approved, days, reason);
         }
 
         async function takeAction(sessionId, userId, interruptId, approved, days, reason) {
