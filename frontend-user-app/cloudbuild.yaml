@@ -1,0 +1,13 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  dir: 'frontend-user-app'
+  args: [ 'build', '-t', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend-user-app', '.' ]
+- name: 'gcr.io/cloud-builders/docker'
+  args: [ 'push', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend-user-app']
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  entrypoint: gcloud
+  args: ['run', 'deploy', '$_DEMO_NAME_-holiday-user-app', '--image', '$_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend-user-app', '--region', '$_REGION_', '--allow-unauthenticated']
+options:
+  logging: CLOUD_LOGGING_ONLY
+images:
+- $_REGION_-docker.pkg.dev/$_PROJECT_ID_/$_GAR_REPOSITORY_/frontend-user-app

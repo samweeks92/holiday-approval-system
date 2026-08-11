@@ -1,3 +1,6 @@
+# Copyright 2026 Google LLC
+# LeaveFlow AI - Bright Vacation-Themed Manager Portal
+
 import asyncio
 import json
 import os
@@ -12,9 +15,10 @@ import google.auth
 from google.auth.transport.requests import Request as AuthRequest
 from google.adk.sessions.vertex_ai_session_service import VertexAiSessionService
 
-app = FastAPI(title="LeaveFlow AI - Holiday Manager Portal")
+from firestore_db import get_all_balances, get_employee_balance, record_approved_vacation
 
-# Environment & Runtime Configurations
+app = FastAPI(title="LeaveFlow AI - Vacation & PTO Manager Portal")
+
 PROJECT_ID = os.environ.get("PROJECT_ID", "ai-sandbox-sw")
 LOCATION = os.environ.get("LOCATION", "europe-west1")
 AGENT_RUNTIME_ID = os.environ.get(
@@ -27,12 +31,11 @@ session_service = VertexAiSessionService(project=PROJECT_ID, location=LOCATION)
 
 class ActionRequest(BaseModel):
     approved: bool
-    user_id: Optional[str] = "cli-user"
+    user_id: Optional[str] = "alice"
     interrupt_id: Optional[str] = "manager_review"
 
 
 def get_auth_headers() -> Dict[str, str]:
-    """Retrieves Google Auth bearer token for Agent Runtime HTTP calls."""
     credentials, _ = google.auth.default()
     credentials.refresh(AuthRequest())
     return {
@@ -41,15 +44,14 @@ def get_auth_headers() -> Dict[str, str]:
     }
 
 
-# Global In-Memory Cache for Sub-Millisecond Dashboard Responses
 CACHED_PENDING_APPROVALS: List[Dict[str, Any]] = []
 CACHE_LOCK = asyncio.Lock()
 
 
 async def refresh_pending_cache():
-    """Fetches sessions in parallel across user_ids and updates the in-memory pending approvals cache."""
+    """Fetches sessions across user_ids and updates the in-memory pending approvals cache."""
     global CACHED_PENDING_APPROVALS
-    target_users = ["vais-query-reasoning-engine", "default-user", "cli-user"]
+    target_users = ["alice", "bob", "charlie", "vais-query-reasoning-engine", "default-user", "cli-user"]
     pending_approvals = []
     seen_sessions = set()
 
@@ -84,7 +86,7 @@ async def refresh_pending_cache():
                 message = None
                 days = None
                 reason = None
-                employee = "Employee"
+                employee = "Alice Smith"
                 department = "Engineering"
 
                 for ev in session_obj.events:
@@ -130,35 +132,29 @@ async def refresh_pending_cache():
                     })
 
         except Exception as err:
-            print(f"Error querying user_id {user_id}: {err}")
+            pass
 
     async with CACHE_LOCK:
         CACHED_PENDING_APPROVALS = pending_approvals
 
 
 async def background_poll_loop():
-    """Continuous background loop updating pending approvals cache every 2 seconds."""
     while True:
         try:
             await refresh_pending_cache()
-        except Exception as err:
-            print(f"Background polling error: {err}")
+        except Exception:
+            pass
         await asyncio.sleep(2.0)
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Triggers immediate cache population and launches background polling task."""
     asyncio.create_task(refresh_pending_cache())
     asyncio.create_task(background_poll_loop())
 
 
 @app.get("/api/pending")
 async def list_pending_approvals():
-    """
-    Serves pending holiday approvals instantly (<1ms) from in-memory cache,
-    updated continuously in the background by parallel session calls.
-    """
     async with CACHE_LOCK:
         current_pending = list(CACHED_PENDING_APPROVALS)
 
@@ -168,13 +164,18 @@ async def list_pending_approvals():
     return {"status": "success", "count": len(current_pending), "pending": current_pending}
 
 
+@app.get("/api/balances")
+async def list_balances():
+    balances = get_all_balances()
+    return {"status": "success", "balances": balances}
+
+
 @app.post("/api/action/{session_id}")
 async def take_approval_action(session_id: str, req: ActionRequest):
-    """Resumes a paused holiday approval session on Agent Runtime with manager's decision."""
     stream_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/{AGENT_RUNTIME_ID}:streamQuery"
     headers = get_auth_headers()
 
-    target_user_id = req.user_id or "default-user"
+    target_user_id = req.user_id or "alice"
     interrupt_id = req.interrupt_id or "manager_review"
 
     resume_message = {
@@ -223,6 +224,8 @@ async def take_approval_action(session_id: str, req: ActionRequest):
             status_word = "APPROVED ✅" if req.approved else "REJECTED ❌"
             review_text = f"Holiday request decision recorded ({status_word}). Workflow finalized."
 
+        asyncio.create_task(refresh_pending_cache())
+
         return {
             "status": "success",
             "session_id": session_id,
@@ -230,432 +233,580 @@ async def take_approval_action(session_id: str, req: ActionRequest):
             "review": review_text.strip(),
         }
 
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
 
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard():
-    """Serves the premium glassmorphic Holiday Approval Portal UI."""
+async def serve_dashboard(request: Request):
+    """Renders the Bright Vacation-Themed Light UI Dashboard."""
     html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LeaveFlow AI - Manager Approval Portal</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --bg-dark: #0B0F19;
-      --bg-card: rgba(255, 255, 255, 0.03);
-      --bg-card-hover: rgba(255, 255, 255, 0.05);
-      --border-glow: rgba(255, 255, 255, 0.08);
-      --accent-cyan: #38BDF8;
-      --accent-purple: #818CF8;
-      --accent-emerald: #34D399;
-      --accent-rose: #FB7185;
-      --text-main: #F8FAFC;
-      --text-muted: #94A3B8;
-    }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LeaveFlow AI - Vacation & PTO Manager Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: rgba(255, 255, 255, 0.92);
+            --primary-blue: #0284c7;
+            --ocean-light: #e0f2fe;
+            --accent-gold: #f59e0b;
+            --gold-light: #fef3c7;
+            --emerald-green: #10b981;
+            --green-light: #d1fae5;
+            --rose-red: #ef4444;
+            --red-light: #fee2e2;
+            --text-dark: #0f172a;
+            --text-muted: #64748b;
+            --border-light: #e2e8f0;
+            --shadow-subtle: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.02);
+            --shadow-hover: 0 20px 25px -5px rgba(2, 132, 199, 0.12), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+        }
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; }
 
-    body {
-      font-family: 'Inter', sans-serif;
-      background-color: var(--bg-dark);
-      color: var(--text-main);
-      min-height: 100vh;
-      overflow-x: hidden;
-      position: relative;
-    }
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(14, 165, 233, 0.08) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(245, 158, 11, 0.08) 0px, transparent 50%),
+                radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.06) 0px, transparent 50%);
+            background-attachment: fixed;
+            color: var(--text-dark);
+            padding: 30px 20px;
+            min-height: 100vh;
+        }
 
-    .bg-glow-1 {
-      position: absolute; top: -150px; left: -100px; width: 600px; height: 600px;
-      background: radial-gradient(circle, rgba(129, 140, 248, 0.15) 0%, rgba(11, 15, 25, 0) 70%);
-      pointer-events: none; z-index: 0;
-    }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
 
-    .bg-glow-2 {
-      position: absolute; top: 400px; right: -150px; width: 700px; height: 700px;
-      background: radial-gradient(circle, rgba(56, 189, 248, 0.12) 0%, rgba(11, 15, 25, 0) 70%);
-      pointer-events: none; z-index: 0;
-    }
+        /* Vacation Banner Header */
+        header {
+            background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%);
+            border: 1px solid var(--border-light);
+            border-radius: 24px;
+            padding: 28px 36px;
+            box-shadow: var(--shadow-subtle);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            position: relative;
+            overflow: hidden;
+        }
 
-    .app-container {
-      max-width: 1200px; margin: 0 auto; padding: 40px 24px; position: relative; z-index: 1;
-    }
+        header::after {
+            content: "🌴 ☀️ ✈️";
+            position: absolute;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 38px;
+            opacity: 0.85;
+            letter-spacing: 8px;
+        }
 
-    header {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 40px; padding-bottom: 24px; border-bottom: 1px solid var(--border-glow);
-    }
+        .brand-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-dark);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
 
-    .brand-group { display: flex; align-items: center; gap: 16px; }
+        .brand-title span {
+            background: linear-gradient(135deg, var(--primary-blue), #0369a1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
 
-    .brand-icon {
-      width: 48px; height: 48px;
-      background: linear-gradient(135deg, var(--accent-purple), var(--accent-cyan));
-      border-radius: 14px; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 0 20px rgba(129, 140, 248, 0.3); font-size: 24px;
-    }
+        .brand-subtitle {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
 
-    .brand-title h1 {
-      font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 26px;
-      background: linear-gradient(135deg, #FFFFFF 0%, #CBD5E1 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--green-light);
+            color: #065f46;
+            padding: 8px 16px;
+            border-radius: 9999px;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
 
-    .brand-title p { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--emerald-green);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--emerald-green);
+            animation: pulse 2s infinite;
+        }
 
-    .status-badge {
-      display: flex; align-items: center; gap: 8px;
-      background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2);
-      padding: 8px 16px; border-radius: 30px; font-size: 13px; color: var(--accent-emerald); font-weight: 500;
-    }
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.2); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
 
-    .status-dot {
-      width: 8px; height: 8px; background-color: var(--accent-emerald); border-radius: 50%;
-      box-shadow: 0 0 8px var(--accent-emerald); animation: pulse 2s infinite;
-    }
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 32px;
+        }
 
-    @keyframes pulse {
-      0% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(1.2); }
-      100% { opacity: 1; transform: scale(1); }
-    }
+        /* Section Headings */
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-dark);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-    .stats-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 40px;
-    }
+        /* Balances Cards Grid */
+        .balance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
 
-    .stat-card {
-      background: var(--bg-card); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-      border: 1px solid var(--border-glow); border-radius: 16px; padding: 24px; transition: all 0.3s ease;
-    }
+        .balance-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-light);
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: var(--shadow-subtle);
+            transition: all 0.3s ease;
+        }
 
-    .stat-card:hover {
-      background: var(--bg-card-hover); border-color: rgba(255, 255, 255, 0.15); transform: translateY(-2px);
-    }
+        .balance-card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-hover);
+            border-color: #bae6fd;
+        }
 
-    .stat-label { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+        .user-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
 
-    .stat-value { font-family: 'Outfit', sans-serif; font-size: 32px; font-weight: 700; color: #FFFFFF; }
+        .user-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--ocean-light), #bae6fd);
+            color: var(--primary-blue);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+        }
 
-    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        .user-name {
+            font-size: 17px;
+            font-weight: 600;
+            color: var(--text-dark);
+        }
 
-    .section-title { font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+        .user-role {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
 
-    .badge-count { background: rgba(129, 140, 248, 0.2); color: var(--accent-purple); padding: 2px 10px; border-radius: 12px; font-size: 13px; font-weight: 600; }
+        .stat-numbers {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 12px;
+        }
 
-    .btn-refresh {
-      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-glow);
-      color: var(--text-main); padding: 10px 18px; border-radius: 10px; cursor: pointer;
-      font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.2s ease;
-    }
+        .rem-days {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary-blue);
+        }
 
-    .btn-refresh:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.2); }
+        .total-days {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
 
-    .cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; }
+        .progress-bar-bg {
+            height: 10px;
+            background: var(--border-light);
+            border-radius: 9999px;
+            overflow: hidden;
+        }
 
-    .card {
-      background: var(--bg-card); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-      border: 1px solid var(--border-glow); border-radius: 20px; padding: 28px;
-      display: flex; flex-direction: column; justify-content: space-between;
-      position: relative; overflow: hidden; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-blue), #38bdf8);
+            border-radius: 9999px;
+            transition: width 0.5s ease;
+        }
 
-    .card::before {
-      content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 4px;
-      background: linear-gradient(90deg, var(--accent-purple), var(--accent-cyan));
-    }
+        /* Pending Approvals */
+        .approval-card {
+            background: #ffffff;
+            border: 1px solid #e0f2fe;
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: var(--shadow-subtle);
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 20px;
+            transition: all 0.3s ease;
+        }
 
-    .card:hover {
-      background: var(--bg-card-hover); border-color: rgba(129, 140, 248, 0.3);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4); transform: translateY(-4px);
-    }
+        .approval-card:hover {
+            box-shadow: var(--shadow-hover);
+        }
 
-    .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+        .badge-pending {
+            background: var(--gold-light);
+            color: #b45309;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            display: inline-block;
+            margin-bottom: 8px;
+        }
 
-    .employee-info h3 { font-size: 18px; font-weight: 600; color: #FFFFFF; margin-bottom: 4px; }
+        .req-info {
+            flex: 1;
+        }
 
-    .employee-info p { font-size: 13px; color: var(--text-muted); }
+        .req-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-dark);
+            margin-bottom: 6px;
+        }
 
-    .days-badge {
-      font-family: 'Outfit', sans-serif; font-size: 20px; font-weight: 700; color: var(--accent-cyan);
-      background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.2);
-      padding: 6px 14px; border-radius: 12px;
-    }
+        .req-desc {
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
 
-    .card-body { margin-bottom: 24px; }
+        .req-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: #475569;
+        }
 
-    .description-box {
-      background: rgba(0, 0, 0, 0.2); border-radius: 12px; padding: 14px;
-      font-size: 14px; color: #CBD5E1; line-height: 1.5; margin-bottom: 16px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
-    }
+        .action-btns {
+            display: flex;
+            gap: 12px;
+        }
 
-    .meta-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
+        .btn {
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
 
-    .card-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        .btn-approve {
+            background: linear-gradient(135deg, var(--emerald-green), #059669);
+            color: white;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+        }
 
-    .btn-action {
-      padding: 12px; border-radius: 12px; font-size: 14px; font-weight: 600;
-      cursor: pointer; border: none; display: flex; align-items: center; justify-content: center;
-      gap: 8px; transition: all 0.2s ease;
-    }
+        .btn-approve:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(16, 185, 129, 0.35);
+        }
 
-    .btn-approve {
-      background: linear-gradient(135deg, #10B981 0%, #059669 100%); color: #FFFFFF;
-      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
-    }
+        .btn-reject {
+            background: #ffffff;
+            color: var(--rose-red);
+            border: 1px solid var(--rose-red);
+        }
 
-    .btn-approve:hover {
-      background: linear-gradient(135deg, #34D399 0%, #10B981 100%);
-      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4); transform: translateY(-1px);
-    }
+        .btn-reject:hover {
+            background: var(--red-light);
+        }
 
-    .btn-reject {
-      background: rgba(251, 113, 133, 0.1); border: 1px solid rgba(251, 113, 133, 0.3); color: var(--accent-rose);
-    }
+        .empty-state {
+            background: white;
+            border: 1px dashed var(--border-light);
+            border-radius: 20px;
+            padding: 48px;
+            text-align: center;
+            color: var(--text-muted);
+        }
 
-    .btn-reject:hover { background: rgba(251, 113, 133, 0.2); border-color: rgba(251, 113, 133, 0.5); transform: translateY(-1px); }
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
 
-    .empty-state {
-      background: var(--bg-card); border: 1px dashed var(--border-glow); border-radius: 20px;
-      padding: 60px; text-align: center; grid-column: 1 / -1;
-    }
+        /* Vacation History Log */
+        .history-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: white;
+            border-radius: 20px;
+            border: 1px solid var(--border-light);
+            overflow: hidden;
+            box-shadow: var(--shadow-subtle);
+        }
 
-    .empty-state-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.6; }
-    .empty-state h3 { font-size: 18px; font-weight: 600; color: #FFFFFF; margin-bottom: 8px; }
-    .empty-state p { font-size: 14px; color: var(--text-muted); }
+        .history-table th {
+            background: #f8fafc;
+            padding: 16px 24px;
+            text-align: left;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            border-bottom: 1px solid var(--border-light);
+        }
 
-    .modal-overlay {
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      background: rgba(11, 15, 25, 0.7); backdrop-filter: blur(8px); z-index: 100;
-      opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
-    }
+        .history-table td {
+            padding: 16px 24px;
+            font-size: 14px;
+            color: var(--text-dark);
+            border-bottom: 1px solid #f1f5f9;
+        }
 
-    .modal-overlay.active { opacity: 1; pointer-events: auto; }
+        .history-table tr:last-child td {
+            border-bottom: none;
+        }
 
-    .drawer {
-      position: fixed; top: 0; right: -500px; width: 100%; max-width: 480px; height: 100vh;
-      background: #111827; border-left: 1px solid var(--border-glow); z-index: 101;
-      padding: 32px; display: flex; flex-direction: column; justify-content: space-between;
-      transition: right 0.4s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: -20px 0 50px rgba(0, 0, 0, 0.5);
-    }
-
-    .modal-overlay.active .drawer { right: 0; }
-
-    .drawer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-    .drawer-header h2 { font-family: 'Outfit', sans-serif; font-size: 22px; font-weight: 700; }
-
-    .btn-close {
-      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-glow);
-      color: var(--text-muted); width: 36px; height: 36px; border-radius: 10px; cursor: pointer; font-size: 18px;
-    }
-
-    .drawer-body { flex: 1; overflow-y: auto; }
-
-    .review-card {
-      background: rgba(0, 0, 0, 0.3); border: 1px solid var(--border-glow); border-radius: 14px;
-      padding: 20px; font-size: 14px; line-height: 1.6; color: #E2E8F0; white-space: pre-wrap;
-    }
-
-    .drawer-footer { margin-top: 24px; }
-    .btn-done { width: 100%; padding: 14px; background: var(--accent-purple); color: #FFFFFF; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; }
-  </style>
+        .status-pill-approved {
+            background: var(--green-light);
+            color: #065f46;
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+    </style>
 </head>
 <body>
-  <div class="bg-glow-1"></div>
-  <div class="bg-glow-2"></div>
-
-  <div class="app-container">
-    <header>
-      <div class="brand-group">
-        <div class="brand-icon">🌴</div>
-        <div class="brand-title">
-          <h1>LeaveFlow AI Manager Portal</h1>
-          <p>ADK 2.0 Agent Runtime • Leave Governance Stream</p>
-        </div>
-      </div>
-      <div class="status-badge">
-        <div class="status-dot"></div>
-        Agent Engine Connected
-      </div>
-    </header>
-
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="stat-label">Pending Review (>5 Days)</div>
-        <div class="stat-value" id="stat-pending">0</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Auto-Approved (<= 5 Days)</div>
-        <div class="stat-value" style="color: var(--accent-emerald);">Auto-Active</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-label">Agent Engine Runtime</div>
-        <div class="stat-value" style="color: var(--accent-purple); font-size: 24px;">Vertex AI Engine</div>
-      </div>
-    </div>
-
-    <div class="section-header">
-      <div class="section-title">
-        Pending Holiday Approvals
-        <span class="badge-count" id="count-badge">0</span>
-      </div>
-      <button class="btn-refresh" onclick="fetchPendingApprovals()">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-        Refresh Stream
-      </button>
-    </div>
-
-    <div class="cards-grid" id="cards-container">
-      <div class="empty-state">
-        <div class="empty-state-icon">✨</div>
-        <h3>No Pending Holiday Requests</h3>
-        <p>All employee leave requests have been processed or auto-approved by the policy engine.</p>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal-overlay" id="modal-overlay">
-    <div class="drawer">
-      <div>
-        <div class="drawer-header">
-          <h2>Agent Compliance Result</h2>
-          <button class="btn-close" onclick="closeModal()">&times;</button>
-        </div>
-        <div class="drawer-body">
-          <div class="review-card" id="modal-review-content">Processing decision...</div>
-        </div>
-      </div>
-      <div class="drawer-footer">
-        <button class="btn-done" onclick="closeModal()">Close Review</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    async function fetchPendingApprovals() {
-      try {
-        const res = await fetch('/api/pending');
-        const data = await res.json();
-        const pending = data.pending || [];
-        
-        document.getElementById('stat-pending').innerText = pending.length;
-        document.getElementById('count-badge').innerText = pending.length;
-
-        const container = document.getElementById('cards-container');
-        if (pending.length === 0) {
-          container.innerHTML = `
-            <div class="empty-state">
-              <div class="empty-state-icon">✨</div>
-              <h3>No Pending Holiday Requests</h3>
-              <p>All employee leave requests have been processed or auto-approved by the policy engine.</p>
-            </div>`;
-          return;
-        }
-
-        container.innerHTML = '';
-        pending.forEach(function(item) {
-          const card = document.createElement('div');
-          card.className = 'card';
-          card.id = 'card-' + item.session_id;
-
-          const emp = item.employee || 'Employee Claim';
-          const dept = item.department || 'Engineering';
-          const days = item.days ? item.days + ' Day(s)' : '6 Day(s)';
-          const reason = item.reason || item.message || 'Holiday request exceeds 5 days threshold';
-          const shortSid = item.session_id ? item.session_id.substring(0, 12) : '';
-
-          card.innerHTML = `
+    <div class="container">
+        <!-- Header -->
+        <header>
             <div>
-              <div class="card-header">
-                <div class="employee-info">
-                  <h3 class="emp-title"></h3>
-                  <p class="dept-title"></p>
-                </div>
-                <div class="days-badge"></div>
-              </div>
-              <div class="card-body">
-                <div class="description-box"></div>
-                <div class="meta-row">
-                  <span>Session: ` + shortSid + `...</span>
-                  <span>Requires Manager Decision</span>
-                </div>
-              </div>
+                <div class="brand-title">LeaveFlow AI <span>Vacation Hub</span></div>
+                <div class="brand-subtitle">Autonomous Holiday Approvals & Real-Time PTO Allowance System</div>
             </div>
-            <div class="card-actions">
-              <button class="btn-action btn-approve" data-sid="` + item.session_id + `" data-user="` + item.user_id + `" data-interrupt="` + item.interrupt_id + `">
-                Approve Leave
-              </button>
-              <button class="btn-action btn-reject" data-sid="` + item.session_id + `" data-user="` + item.user_id + `" data-interrupt="` + item.interrupt_id + `">
-                Reject
-              </button>
-            </div>`;
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                Agent Engine Live
+            </div>
+        </header>
 
-          card.querySelector('.emp-title').textContent = emp;
-          card.querySelector('.dept-title').textContent = 'Department: ' + dept;
-          card.querySelector('.days-badge').textContent = days;
-          card.querySelector('.description-box').textContent = reason;
+        <!-- Employee Balances Grid -->
+        <div class="section-title">👥 Employee Vacation Balances (25.0 Days Annual Allowance)</div>
+        <div class="balance-grid" id="balances-container">
+            <div class="balance-card">Loading employee PTO balances...</div>
+        </div>
 
-          card.querySelector('.btn-approve').addEventListener('click', function() {
-            takeAction(item.session_id, true, item.user_id, item.interrupt_id, card);
-          });
-          card.querySelector('.btn-reject').addEventListener('click', function() {
-            takeAction(item.session_id, false, item.user_id, item.interrupt_id, card);
-          });
+        <!-- Pending Approvals Section -->
+        <div class="section-title">⏳ Pending Manager Approvals (> 5 Days Policy Threshold)</div>
+        <div id="pending-container">
+            <div class="empty-state">
+                <div class="empty-icon">🏖️</div>
+                <h3>Checking for pending requests...</h3>
+            </div>
+        </div>
 
-          container.appendChild(card);
-        });
+        <!-- Vacation History Log -->
+        <div style="margin-top: 32px;">
+            <div class="section-title">📜 Approved Vacation History & Audit Log</div>
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>Employee</th>
+                        <th>Vacation Reason</th>
+                        <th>Days Deducted</th>
+                        <th>Status</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody id="history-container">
+                    <tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 32px;">No approved vacation history recorded yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
-      } catch (err) {
-        console.error('Error fetching pending approvals:', err);
-      }
-    }
-
-    async function takeAction(sessionId, approved, userId, interruptId, card) {
-      const btnEl = card.querySelector(approved ? '.btn-approve' : '.btn-reject');
-      btnEl.disabled = true;
-
-      try {
-        const res = await fetch('/api/action/' + sessionId, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ approved, user_id: userId, interrupt_id: interruptId })
-        });
-
-        const data = await res.json();
-        
-        document.getElementById('modal-review-content').innerText = data.review || 'Action recorded successfully.';
-        document.getElementById('modal-overlay').classList.add('active');
-
-        if (card) {
-          card.style.opacity = '0';
-          card.style.transform = 'scale(0.9)';
-          setTimeout(() => fetchPendingApprovals(), 400);
+    <script>
+        async function fetchBalances() {
+            try {
+                const res = await fetch('/api/balances');
+                const data = await res.json();
+                if (data.status === 'success' && data.balances) {
+                    renderBalances(data.balances);
+                    renderHistory(data.balances);
+                }
+            } catch (err) {
+                console.error('Error fetching balances:', err);
+            }
         }
 
-      } catch (err) {
-        alert('Action failed: ' + err.message);
-      } finally {
-        btnEl.disabled = false;
-      }
-    }
+        function renderBalances(balances) {
+            const container = document.getElementById('balances-container');
+            container.innerHTML = balances.map(b => {
+                const rem = b.remaining_balance !== undefined ? b.remaining_balance : 25.0;
+                const total = b.starting_balance || 25.0;
+                const used = b.used_days || (total - rem);
+                const pct = Math.min(100, Math.max(0, (rem / total) * 100));
+                const avatar = (b.employee || b.user_id || 'A').charAt(0).toUpperCase();
 
-    function closeModal() {
-      document.getElementById('modal-overlay').classList.remove('active');
-    }
+                return `
+                    <div class="balance-card">
+                        <div class="user-header">
+                            <div>
+                                <div class="user-name">${b.employee || b.user_id}</div>
+                                <div class="user-role">ID: ${b.user_id} | Annual Allowance: ${total} Days</div>
+                            </div>
+                            <div class="user-avatar">${avatar}</div>
+                        </div>
+                        <div class="stat-numbers">
+                            <div class="rem-days">${rem} <span style="font-size:16px; font-weight:400; color:var(--text-muted);">days left</span></div>
+                            <div class="total-days">${used} days used</div>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" style="width: ${pct}%;"></div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
 
-    document.addEventListener('DOMContentLoaded', fetchPendingApprovals);
-    window.addEventListener('load', fetchPendingApprovals);
-    fetchPendingApprovals();
-    setInterval(fetchPendingApprovals, 3000);
-  </script>
+        function renderHistory(balances) {
+            const container = document.getElementById('history-container');
+            let allHistory = [];
+            balances.forEach(b => {
+                if (b.history && Array.isArray(b.history)) {
+                    b.history.forEach(h => {
+                        allHistory.push({
+                            employee: b.employee || b.user_id,
+                            reason: h.reason || 'Vacation',
+                            days: h.days || 1,
+                            status: h.status || 'APPROVED',
+                            timestamp: h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : 'Recently'
+                        });
+                    });
+                }
+            });
+
+            if (allHistory.length === 0) {
+                container.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 32px;">No approved vacation history recorded yet.</td></tr>';
+                return;
+            }
+
+            container.innerHTML = allHistory.map(h => `
+                <tr>
+                    <td><strong>${h.employee}</strong></td>
+                    <td>${h.reason}</td>
+                    <td><strong style="color: var(--primary-blue);">${h.days} days</strong></td>
+                    <td><span class="status-pill-approved">${h.status}</span></td>
+                    <td>${h.timestamp}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function fetchPending() {
+            try {
+                const res = await fetch('/api/pending');
+                const data = await res.json();
+                const container = document.getElementById('pending-container');
+
+                if (data.status === 'success' && data.pending && data.pending.length > 0) {
+                    container.innerHTML = data.pending.map(p => `
+                        <div class="approval-card">
+                            <div class="req-info">
+                                <span class="badge-pending">⚠️ MANAGER REVIEW REQUIRED</span>
+                                <div class="req-title">${p.employee} (${p.department || 'Engineering'}) &mdash; ${p.days} Days Requested</div>
+                                <div class="req-desc"><strong>Reason:</strong> ${p.reason}</div>
+                                <div class="req-meta">
+                                    <span>🆔 Session: ${p.session_id}</span>
+                                    <span>👤 User ID: ${p.user_id}</span>
+                                </div>
+                            </div>
+                            <div class="action-btns">
+                                <button class="btn btn-approve" onclick="takeAction('${p.session_id}', '${p.user_id}', '${p.interrupt_id}', true)">
+                                    ✅ Approve Vacation
+                                </button>
+                                <button class="btn btn-reject" onclick="takeAction('${p.session_id}', '${p.user_id}', '${p.interrupt_id}', false)">
+                                    ❌ Reject
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-icon">🏖️</div>
+                            <h3>No Pending Approvals</h3>
+                            <p style="margin-top: 4px;">All submitted holiday requests are processed or within policy thresholds.</p>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                console.error('Error fetching pending approvals:', err);
+            }
+        }
+
+        async function takeAction(sessionId, userId, interruptId, approved) {
+            try {
+                const res = await fetch(\`/api/action/\${sessionId}\`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ approved, user_id: userId, interrupt_id: interruptId })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(\`Decision Recorded! \${approved ? 'Approved ✅' : 'Rejected ❌'}\`);
+                    fetchPending();
+                    fetchBalances();
+                } else {
+                    alert('Error: ' + (data.detail || 'Action failed'));
+                }
+            } catch (err) {
+                alert('Action failed: ' + err);
+            }
+        }
+
+        fetchBalances();
+        fetchPending();
+        setInterval(fetchBalances, 4000);
+        setInterval(fetchPending, 3000);
+    </script>
 </body>
-</html>
-"""
+</html>"""
     return HTMLResponse(content=html_content)

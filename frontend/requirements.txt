@@ -6,6 +6,7 @@ google-adk>=1.34.1,<2.0.0
 
 # Recommended for structured logging in Cloud Logging
 google-cloud-logging
+google-cloud-firestore
 
 # Common dependencies for Agent logic (Add your specific ones below)
 python-dotenv>=1.0.1

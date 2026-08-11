@@ -58,7 +58,7 @@ resource "google_pubsub_subscription" "push_subscription" {
   ack_deadline_seconds  = 600
 
   push_config {
-    push_endpoint = "https://${var.region}-aiplatform.googleapis.com/v1/projects/${var.project}/locations/${var.region}/reasoningEngines/${var.agent-runtime-id}:query"
+    push_endpoint = "https://${var.region}-aiplatform.googleapis.com/v1/projects/${var.project}/locations/${var.region}/reasoningEngines/${var.agent-runtime-id}:streamQuery"
 
     no_wrapper {
       write_metadata = false
