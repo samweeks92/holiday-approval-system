@@ -97,12 +97,27 @@ async def get_user_data(user_id: str):
 @app.post("/api/chat")
 async def chat_with_agent(req: ChatRequest):
     uid = normalize_user_id(req.user_id)
-    stream_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/{AGENT_ENGINE_ID}:streamQuery"
+    engine_url = f"https://{LOCATION}-aiplatform.googleapis.com/v1/{AGENT_ENGINE_ID}"
     headers = get_auth_headers()
 
-    sid = req.session_id or f"session-{uid}-{os.urandom(4).hex()}"
+    sid = req.session_id
 
-    payload = {
+    # 1. Ensure a valid Agent Engine Session exists
+    if not sid or sid.startswith("session-"):
+        try:
+            create_payload = {
+                "class_method": "async_create_session",
+                "input": {"user_id": uid}
+            }
+            c_resp = requests.post(f"{engine_url}:query", headers=headers, json=create_payload, timeout=15)
+            if c_resp.ok:
+                c_data = c_resp.json()
+                sid = c_data.get("output", {}).get("id") or c_data.get("id") or sid
+        except Exception as c_err:
+            logger.warning(f"Session creation notice for {uid}: {c_err}")
+
+    # 2. Query Agent Engine Stream
+    stream_payload = {
         "class_method": "async_stream_query",
         "input": {
             "user_id": uid,
@@ -115,7 +130,7 @@ async def chat_with_agent(req: ChatRequest):
     }
 
     try:
-        resp = requests.post(stream_url, headers=headers, json=payload, timeout=60)
+        resp = requests.post(f"{engine_url}:streamQuery", headers=headers, json=stream_payload, timeout=60)
         agent_reply = ""
         if resp.ok:
             for line in resp.text.splitlines():
@@ -127,7 +142,7 @@ async def chat_with_agent(req: ChatRequest):
                     content = event_data.get("content", {})
                     if content and "parts" in content:
                         for part in content["parts"]:
-                            if "text" in part:
+                            if "text" in part and part["text"]:
                                 agent_reply += part["text"] + "\n"
                 except json.JSONDecodeError:
                     continue
@@ -135,7 +150,7 @@ async def chat_with_agent(req: ChatRequest):
             agent_reply = f"⚠️ Agent Engine notice ({resp.status_code}): {resp.text[:200]}"
 
         if not agent_reply.strip():
-            agent_reply = f"Hi {uid.capitalize()}! Message received by LeaveFlow AI."
+            agent_reply = f"Hi {uid.capitalize()}! LeaveFlow AI processed your message."
 
         return {
             "status": "success",
@@ -560,7 +575,10 @@ async def serve_portal():
                 });
                 const data = await res.json();
                 if (data.status === 'success' && data.reply) {
-                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\\n/g, '<br>') + '</div>';
+                    if (data.session_id) {
+                        currentSessionId = data.session_id;
+                    }
+                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\n/g, '<br>') + '</div>';
                 } else {
                     chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 Message processed by LeaveFlow AI.</div>';
                 }

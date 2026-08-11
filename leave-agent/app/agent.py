@@ -214,11 +214,11 @@ auto_decline_agent = LlmAgent(
 async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, None]:
     """Flags holiday requests > 5 days for Human-in-the-Loop manager review."""
     req_dict = node_input if isinstance(node_input, dict) else (node_input.model_dump() if isinstance(node_input, VacationEvaluation) else {})
-    uid = req_dict.get("user_id", "charlie")
-    emp_name = req_dict.get("employee", "Charlie Brown")
-    days = req_dict.get("days", 6.0)
-    reason = req_dict.get("reason", "Vacation")
-    start_date = req_dict.get("start_date", "2026-06-01")
+    uid = req_dict.get("user_id")
+    emp_name = req_dict.get("employee")
+    days = req_dict.get("days")
+    reason = req_dict.get("reason")
+    start_date = req_dict.get("start_date")
 
     record_pending_vacation(emp_name, days, reason, start_date)
 
