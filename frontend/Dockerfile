@@ -2,10 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /code
 
-RUN pip install --no-cache-dir \
-    fastapi uvicorn google-adk google-cloud-aiplatform sse-starlette pydantic requests google-auth
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py .
+COPY . .
 
 EXPOSE 8080
 

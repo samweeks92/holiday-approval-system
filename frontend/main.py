@@ -784,14 +784,14 @@ async def serve_dashboard(request: Request):
 
         async function takeAction(sessionId, userId, interruptId, approved) {
             try {
-                const res = await fetch(\`/api/action/\${sessionId}\`, {
+                const res = await fetch('/api/action/' + sessionId, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ approved, user_id: userId, interrupt_id: interruptId })
                 });
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert(\`Decision Recorded! \${approved ? 'Approved ✅' : 'Rejected ❌'}\`);
+                    alert('Decision Recorded! ' + (approved ? 'Approved ✅' : 'Rejected ❌'));
                     fetchPending();
                     fetchBalances();
                 } else {
