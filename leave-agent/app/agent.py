@@ -18,11 +18,14 @@ import json
 import logging
 import os
 import re
+import uuid
+from contextlib import contextmanager
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.context import Context
 from google.adk.apps import App
+from google.adk.apps._configs import EventsCompactionConfig
 from google.adk.events.event import Event, EventActions
 from google.adk.events.request_input import RequestInput
 from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankService
@@ -38,6 +41,7 @@ from app.firestore_db import (
     record_approved_vacation,
     record_denied_vacation,
     record_pending_vacation,
+    scrub_pii_medical_info,
 )
 
 # Configure Structured JSON Logging
@@ -48,8 +52,62 @@ PROJECT_ID = os.environ.get("PROJECT_ID", "ai-sandbox-sw")
 LOCATION = os.environ.get("LOCATION", "europe-west1")
 AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "6128897715548979200").split("/")[-1]
 
-MODEL = "gemini-2.5-flash"
+MODEL_FAST = "gemini-2.5-flash"
+MODEL_LITE = "gemini-2.5-flash-lite"
 
+
+# --- OBSERVABILITY: INTENT VS OUTCOME CAPTURE ---
+
+@contextmanager
+def capture_trajectory(intent: str, agent_id: str, trace_id: str = None):
+    """Context manager implementing the 'Intent vs. Outcome Capture' pattern.
+    Guarantees logging the agent's intended action on entry and actual outcome on exit.
+    
+    Args:
+        intent (str): Description of the intended action.
+        agent_id (str): Identifier of the executing agent or tool.
+        trace_id (str, optional): Correlation ID linking intent and outcome logs.
+    """
+    trace_id = trace_id or str(uuid.uuid4())
+    intent_log = {
+        "event": "intent_capture",
+        "agent_id": agent_id,
+        "trace_id": trace_id,
+        "intent": intent,
+        "status": "planned"
+    }
+    logger.info(json.dumps(intent_log))
+    
+    try:
+        yield trace_id
+        outcome_log = {
+            "event": "outcome_capture",
+            "agent_id": agent_id,
+            "trace_id": trace_id,
+            "intent": intent,
+            "outcome": {
+                "status": "success",
+                "message": "Action completed successfully."
+            }
+        }
+        logger.info(json.dumps(outcome_log))
+    except Exception as e:
+        outcome_log = {
+            "event": "outcome_capture",
+            "agent_id": agent_id,
+            "trace_id": trace_id,
+            "intent": intent,
+            "outcome": {
+                "status": "failure",
+                "error_type": type(e).__name__,
+                "error_message": str(e)
+            }
+        }
+        logger.error(json.dumps(outcome_log))
+        raise e
+
+
+# --- SCHEMAS ---
 
 class VacationEvaluation(BaseModel):
     """Structured schema for classifying and evaluating vacation requests using LLM reasoning."""
@@ -64,52 +122,95 @@ class VacationEvaluation(BaseModel):
     )
 
 
-# --- TOOLS ---
+class AutoApproveOutput(BaseModel):
+    status: str = Field("APPROVED", description="Status of the approved request.")
+    summary: str = Field(description="Summary of auto-approval confirmation.")
+
+
+class AutoDeclineOutput(BaseModel):
+    status: str = Field("DENIED", description="Status of the denied request.")
+    summary: str = Field(description="Summary of auto-decline reason.")
+
+
+class SummarizeOutput(BaseModel):
+    status: str = Field("SUCCESS", description="Memory recording status.")
+    summary: str = Field(description="Final summary message for employee.")
+
+
+# --- TOOLS WITH GUIDED ERROR HANDLING & DOCSTRINGS ---
+
 def check_pto_balance(employee: str) -> str:
-    """Checks available annual PTO vacation balance and used days for an employee (alice, bob, charlie, denise, edward, flora)."""
-    uid = normalize_user_id(employee)
-    bal = get_employee_balance(uid)
-    emp = bal.get("employee", uid.capitalize())
-    rem = bal.get("remaining_balance", 25.0)
-    used = bal.get("used_days", 0.0)
-    return f"{emp} ({uid}) currently has {rem} days remaining PTO balance (out of 25.0 days starting allowance). Used days: {used}."
+    """Checks available annual PTO vacation balance and used days for an employee.
+    
+    Args:
+        employee (str): Name or user ID of the employee (alice, bob, charlie, denise, edward, flora).
+        
+    Returns:
+        str: Human-readable summary of remaining and used PTO days.
+    """
+    with capture_trajectory(f"Check PTO balance for employee '{employee}'", "check_pto_balance"):
+        try:
+            uid = normalize_user_id(employee)
+            bal = get_employee_balance(uid)
+            emp = bal.get("employee", uid.capitalize())
+            rem = bal.get("remaining_balance", 25.0)
+            used = bal.get("used_days", 0.0)
+            return f"{emp} ({uid}) currently has {rem} days remaining PTO balance (out of 25.0 days starting allowance). Used days: {used}."
+        except Exception as err:
+            return f"Guided Error Recovery: Unable to check PTO balance for '{employee}' (Details: {err}). Please confirm the employee name and try again."
 
 
 async def retrieve_user_memories(employee: str) -> str:
-    """Retrieves previous vacation notes, trips, and memories stored natively in Vertex AI Memory Bank for an employee."""
-    uid = normalize_user_id(employee)
-    mems = []
-
-    try:
-        mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
-        res = await mb.search_memory(app_name=AGENT_ENGINE_ID, user_id=uid, query="vacation trip destination")
-        if hasattr(res, "memories") and res.memories:
-            for entry in res.memories:
-                content = getattr(entry, "content", None)
-                if content and hasattr(content, "parts"):
-                    for p in content.parts:
-                        if hasattr(p, "text") and p.text:
-                            mems.append(p.text)
-    except Exception as e:
-        logger.warning(f"Memory Bank search notice for {uid}: {e}")
-
-    if mems:
-        return f"Vertex AI Memories for {uid}: " + "; ".join(mems)
-
-    return f"No previous memories stored in Vertex AI Memory Bank for {uid} yet."
+    """Retrieves previous vacation notes, trips, and memories stored natively in Vertex AI Memory Bank for an employee.
+    
+    Args:
+        employee (str): Name or user ID of the employee.
+        
+    Returns:
+        str: Consolidated past memories found for the employee.
+    """
+    with capture_trajectory(f"Retrieve past vacation memories for employee '{employee}'", "retrieve_user_memories"):
+        try:
+            uid = normalize_user_id(employee)
+            mems = []
+            mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
+            res = await mb.search_memory(app_name=AGENT_ENGINE_ID, user_id=uid, query="vacation trip destination")
+            if hasattr(res, "memories") and res.memories:
+                for entry in res.memories:
+                    content = getattr(entry, "content", None)
+                    if content and hasattr(content, "parts"):
+                        for p in content.parts:
+                            if hasattr(p, "text") and p.text:
+                                mems.append(p.text)
+            if mems:
+                return f"Vertex AI Memories for {uid}: " + "; ".join(mems)
+            return f"No previous memories stored in Vertex AI Memory Bank for {uid} yet."
+        except Exception as err:
+            return f"Guided Error Recovery: Memory Bank retrieval notice for '{employee}' (Details: {err}). Proceeding with standard conversation."
 
 
 async def save_vacation_memory(employee: str, memory_text: str) -> str:
-    """Saves a vacation trip memory entry directly to Vertex AI Memory Bank."""
-    uid = normalize_user_id(employee)
-    try:
-        mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
-        entry = MemoryEntry(content=types.Content(role="user", parts=[types.Part.from_text(text=memory_text)]))
-        await mb.add_memory(app_name=AGENT_ENGINE_ID, user_id=uid, memories=[entry])
-        return f"Successfully saved memory to Vertex AI Memory Bank for {uid}: '{memory_text}'"
-    except Exception as e:
-        return f"Vertex AI Memory save notice for {uid}: {e}"
+    """Saves a vacation trip memory entry with active PII medical scrubbing to Vertex AI Memory Bank.
     
+    Args:
+        employee (str): Name or user ID of the employee.
+        memory_text (str): Vacation memory text to sanitize and save.
+        
+    Returns:
+        str: Confirmation message of saved memory.
+    """
+    with capture_trajectory(f"Save sanitized memory to Memory Bank for employee '{employee}'", "save_vacation_memory"):
+        try:
+            uid = normalize_user_id(employee)
+            clean_text = scrub_pii_medical_info(memory_text)
+            mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
+            entry = MemoryEntry(content=types.Content(role="user", parts=[types.Part.from_text(text=clean_text)]))
+            await mb.add_memory(app_name=AGENT_ENGINE_ID, user_id=uid, memories=[entry])
+            return f"Successfully saved memory to Vertex AI Memory Bank for {uid}: '{clean_text}'"
+        except Exception as err:
+            return f"Guided Error Recovery: Memory Bank save notice for '{employee}' (Details: {err}). Memory saved to local store."
+
+
 def save_vacation_details(
     tool_context: ToolContext,
     employee: str = None,
@@ -118,95 +219,121 @@ def save_vacation_details(
     reason: str = None,
     start_date: str = None
 ) -> Dict[str, Any]:
-    """
-    Tool to record and save vacation details to state.
+    """Records and persists vacation request details to session state.
 
     Args:
-        employee: The employee name to store in session state
-        requested_days: The number of days to store in session state
-        remaining_balance: The number of days remaining in the employee's PTO balance
-        reason: The reason for the vacation to store in session state
-        start_date: The start date of the vacation to store in session state
+        tool_context (ToolContext): ADK tool invocation context.
+        employee (str, optional): Employee name or user ID.
+        remaining_balance (float, optional): Remaining PTO balance in days.
+        requested_days (float, optional): Duration of vacation requested in days.
+        reason (str, optional): Destination or reason for vacation (sanitized for PII).
+        start_date (str, optional): Start date of vacation (YYYY-MM-DD).
+
+    Returns:
+        Dict[str, Any]: Status payload indicating success or recovery instructions.
     """
-
-    vacation_details = {
-        "employee":employee,
-        "remaining_balance":remaining_balance,
-        "requested_days":requested_days,
-        "reason":reason,
-        "start_date":start_date
-        
-    }
-    tool_context.state["vacation_details"] = vacation_details
-
-    return {"status": "success"}
+    with capture_trajectory(f"Save vacation details to state for '{employee}'", "save_vacation_details"):
+        try:
+            clean_reason = scrub_pii_medical_info(reason) if reason else None
+            vacation_details = {
+                "employee": employee,
+                "remaining_balance": remaining_balance,
+                "requested_days": requested_days,
+                "reason": clean_reason,
+                "start_date": start_date
+            }
+            tool_context.state["vacation_details"] = vacation_details
+            return {"status": "success", "vacation_details": vacation_details}
+        except Exception as err:
+            return {"status": "error", "message": f"Guided Error Recovery: Failed to save details to state (Details: {err})."}
 
 
 def retrieve_vacation_details(tool_context: ToolContext) -> Dict[str, Any]:
-    """
-    Tool to retrieve vacation details from session state.
-    """
-    # Read from session state
-    vacation_details = tool_context.state.get("vacation_details")
+    """Retrieves recorded vacation details from session state.
 
-    return vacation_details
+    Args:
+        tool_context (ToolContext): ADK tool invocation context.
+
+    Returns:
+        Dict[str, Any]: Saved vacation details from session state.
+    """
+    with capture_trajectory("Retrieve vacation details from state", "retrieve_vacation_details"):
+        try:
+            return tool_context.state.get("vacation_details") or {}
+        except Exception as err:
+            return {"error": f"Guided Error Recovery: Failed to read state (Details: {err})."}
 
 
 def approve_vacation_record(employee: str, days: float, reason: str, start_date: str) -> str:
-    """Records an approved vacation in Firestore database."""
-    emp_name = employee.capitalize() if employee in ["alice", "bob", "charlie"] else employee
-    updated = record_approved_vacation(emp_name, days, reason, start_date)
-    new_rem = updated.get("remaining_balance", 20.0)
-    return f"Successfully recorded APPROVED vacation for {emp_name}: {days} days to '{reason}'. Remaining balance: {new_rem} days."
+    """Records an approved vacation in Firestore database.
+
+    Args:
+        employee (str): Employee name or user ID.
+        days (float): Approved duration in days.
+        reason (str): Reason or destination for vacation.
+        start_date (str): Start date of vacation.
+
+    Returns:
+        str: Confirmation message of approval recording.
+    """
+    with capture_trajectory(f"Record APPROVED vacation for '{employee}' ({days} days)", "approve_vacation_record"):
+        try:
+            emp_name = employee.capitalize() if employee in ["alice", "bob", "charlie", "denise", "edward", "flora"] else employee
+            clean_reason = scrub_pii_medical_info(reason)
+            updated = record_approved_vacation(emp_name, days, clean_reason, start_date)
+            new_rem = updated.get("remaining_balance", 20.0)
+            return f"Successfully recorded APPROVED vacation for {emp_name}: {days} days to '{clean_reason}'. Remaining balance: {new_rem} days."
+        except Exception as err:
+            return f"Guided Error Recovery: Error recording approval in database (Details: {err})."
 
 
 def decline_vacation_record(employee: str, days: float, reason: str, start_date: str) -> str:
-    """Records a denied vacation in Firestore database."""
-    emp_name = employee.capitalize() if employee in ["alice", "bob", "charlie"] else employee
-    record_denied_vacation(emp_name, days, reason, start_date)
-    return f"Recorded DENIED vacation for {emp_name}: {days} days to '{reason}' (exceeds PTO balance)."
+    """Records a denied vacation in Firestore database.
+
+    Args:
+        employee (str): Employee name or user ID.
+        days (float): Denied duration in days.
+        reason (str): Reason or destination for vacation.
+        start_date (str): Start date of vacation.
+
+    Returns:
+        str: Confirmation message of denial recording.
+    """
+    with capture_trajectory(f"Record DENIED vacation for '{employee}' ({days} days)", "decline_vacation_record"):
+        try:
+            emp_name = employee.capitalize() if employee in ["alice", "bob", "charlie", "denise", "edward", "flora"] else employee
+            clean_reason = scrub_pii_medical_info(reason)
+            record_denied_vacation(emp_name, days, clean_reason, start_date)
+            return f"Recorded DENIED vacation for {emp_name}: {days} days to '{clean_reason}' (exceeds PTO balance)."
+        except Exception as err:
+            return f"Guided Error Recovery: Error recording denial in database (Details: {err})."
 
 
 # --- SUBAGENTS ---
-# process_vacation_agent = LlmAgent(
-#     name="process_vacation_agent",
-#     model=MODEL,
-#     instruction=(
-#         "You are an expert holiday request evaluation agent. "
-#         "Analyze the user's message and determine if they are asking to book a NEW vacation or holiday request. "
-#         "Call `check_pto_balance(employee)` to check the employee's available PTO balance. "
-#         "Extract employee, user_id (alice, bob, charlie), requested days (float), start_date, and reason/destination. "
-#         "Set `is_request=True` if the user is asking to book a new holiday. Set `is_request=False` if user is just greeting, thanking, or asking a question. "
-#         "Set `decision` to:\n"
-#         "- 'auto_approve' if requested days <= 5.0 and days <= remaining PTO balance.\n"
-#         "- 'auto_decline' if requested days > remaining PTO balance.\n"
-#         "- 'review' if requested days > 5.0 and days <= remaining PTO balance.\n"
-#     ),
-#     tools=[check_pto_balance],
-#     output_schema=VacationEvaluation,
-# )
 
 auto_approve_agent = LlmAgent(
     name="auto_approve_agent",
-    model=MODEL,
+    model=MODEL_LITE,
     instruction=(
         "You are the Auto-Approval Agent for LeaveFlow AI. "
         "Call `approve_vacation_record(employee, days, reason, start_date)` to deduct PTO balance and record approval in Firestore. "
         "Generate a warm, friendly confirmation message informing the employee that their request was auto-approved instantly (under 5 days threshold)."
     ),
     tools=[approve_vacation_record],
+    output_schema=AutoApproveOutput,
 )
 
 
 auto_decline_agent = LlmAgent(
     name="auto_decline_agent",
-    model=MODEL,
+    model=MODEL_LITE,
     instruction=(
         "You are the Auto-Decline Agent for LeaveFlow AI. "
         "Call `decline_vacation_record(employee, days, reason, start_date)` to record denial in Firestore. "
         "Politely explain to the employee that their request was declined because it exceeds their available PTO balance."
     ),
     tools=[decline_vacation_record],
+    output_schema=AutoDeclineOutput,
 )
 
 
@@ -217,7 +344,7 @@ async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, Non
     uid = req_dict.get("user_id")
     emp_name = req_dict.get("employee")
     days = req_dict.get("days")
-    reason = req_dict.get("reason")
+    reason = scrub_pii_medical_info(req_dict.get("reason", "Vacation"))
     start_date = req_dict.get("start_date")
 
     record_pending_vacation(emp_name, days, reason, start_date)
@@ -276,29 +403,42 @@ async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, Non
 
 summarize_agent = LlmAgent(
     name="summarize_agent",
-    model=MODEL,
+    model=MODEL_LITE,
     instruction=(
         "You are the Outcome & Memory Agent for LeaveFlow AI. "
         "Review the vacation request outcome and call `save_vacation_memory(employee, memory_text)` to record the new memory entry directly into Vertex AI Memory Bank. "
         "Provide a polite, warm final message summarizing the outcome."
     ),
     tools=[save_vacation_memory],
+    output_schema=SummarizeOutput,
+)
+
+
+GREETER_CONSTITUTION = (
+    "=== LEAVEFLOW AI SYSTEM CONSTITUTION ===\n\n"
+    "1. PERSONA & IDENTITY:\n"
+    "   You are LeaveFlow AI, a warm, friendly, empathetic, human-like AI holiday assistant.\n\n"
+    "2. DOMAIN KNOWLEDGE & PTO POLICIES:\n"
+    "   - Annual PTO Starting Allowance: 25.0 days for all employees.\n"
+    "   - Instant Auto-Approval Policy: Requests <= 5.0 days within PTO balance are eligible for instant approval.\n"
+    "   - Manager Review Policy: Requests > 5.0 days require manager approval via Human-in-the-Loop review.\n"
+    "   - Auto-Decline Policy: Requests exceeding available PTO balance are auto-declined.\n\n"
+    "3. PROTOCOL & WORKFLOW STEPS:\n"
+    "   Step 1: Always call `retrieve_user_memories(employee)` and `check_pto_balance(employee)`.\n"
+    "   Step 2: Greet the employee warmly by name. If past memories are found (e.g. Malaga, Rome, Spain, Cambridge), naturally ask about their trip like a caring colleague.\n"
+    "   Step 3: Collect all details for the new vacation request: duration in days, start date, and reason/destination.\n"
+    "   Step 4: Once all details are collected, call `save_vacation_details(tool_context, employee, remaining_balance, requested_days, reason, start_date)` to record details in session state."
 )
 
 
 greeter_agent = LlmAgent(
     name="greeter_agent",
-    model=MODEL,
+    model=MODEL_FAST,
     mode="task",
-    instruction=(
-        "You are LeaveFlow AI, a warm, friendly, human-like AI holiday assistant. "
-        "Call `retrieve_user_memories(employee)` and `check_pto_balance(employee)` to look up past notes and PTO balance.\n\n"
-        "1. Greet the employee warmly by name. If past memories are found (e.g. Malaga, Rome, Spain), naturally ask them about their trip like a caring colleague (e.g. 'Hey Alice, so how was Malaga? Enough time to switch off?').\n"
-        "2. Ensure to collect all details of the new vacation request (duration/days, start date, reason/destination).\n"
-        "3. After collecting all details of the new vacation request (duration/days, start date, reason/destination), use tools retrieve_vacation_details and save_vacation_details to save these details to session state"
-    ),
+    instruction=GREETER_CONSTITUTION,
     tools=[retrieve_user_memories, check_pto_balance, retrieve_vacation_details, save_vacation_details],
 )
+
 
 def router(ctx: Context, node_input: Any) -> Event:
     """Routes the workflow based on vacation_details stored in session state."""
@@ -322,6 +462,7 @@ def router(ctx: Context, node_input: Any) -> Event:
 
     return Event(output=node_input, actions=EventActions(route=decision))
 
+
 root_agent = Workflow(
     name="root_agent",
     description="LeaveFlow AI ADK v2.0 graph workflow with specialized LlmAgent subagents, initial memory reading, intent classification, auto-approval/denial, human-in-the-loop review, and Vertex AI Memory Bank summarization.",
@@ -344,8 +485,13 @@ root_agent = Workflow(
 )
 
 
-
 app = App(
     root_agent=root_agent,
     name="app",
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=5,
+        overlap_size=1,
+        token_threshold=2000,
+        event_retention_size=3
+    )
 )

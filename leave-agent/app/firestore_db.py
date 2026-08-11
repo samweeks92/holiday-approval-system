@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import logging
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 from google.cloud import firestore
@@ -210,6 +211,27 @@ def record_denied_vacation(employee: str, days: float, reason: str, start_date: 
     return curr_data
 
 
+def scrub_pii_medical_info(text: str) -> str:
+    """Scrubs personal health information (PHI/PII), SSNs, and sensitive medical terms from text prior to storage.
+    
+    Args:
+        text (str): Raw text containing potential medical or sensitive notes.
+        
+    Returns:
+        str: Sanitized text with medical terms and SSNs replaced by [REDACTED_MEDICAL_INFO] and [REDACTED_SSN].
+    """
+    if not text:
+        return ""
+    
+    scrubbed = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[REDACTED_SSN]", str(text))
+    medical_keywords = [
+        "hospital", "surgery", "doctor", "medical", "clinic",
+        "illness", "treatment", "operation", "patient", "health", "physician"
+    ]
+    pattern = re.compile(r"\b(" + "|".join(medical_keywords) + r")\b", re.IGNORECASE)
+    return pattern.sub("[REDACTED_MEDICAL_INFO]", scrubbed)
+
+
 def _async_save_vertex_memory(uid: str, memory_text: str):
     """Background task to save memory to Vertex AI Agent Engine Memory Bank."""
     try:
@@ -219,7 +241,8 @@ def _async_save_vertex_memory(uid: str, memory_text: str):
         clean_engine_id = AGENT_ENGINE_ID.split("/")[-1]
         mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=clean_engine_id)
 
-        content = types.Content(role="user", parts=[types.Part.from_text(text=memory_text)])
+        clean_text = scrub_pii_medical_info(memory_text)
+        content = types.Content(role="user", parts=[types.Part.from_text(text=clean_text)])
         entry = MemoryEntry(content=content)
 
         async def _run():
@@ -229,16 +252,26 @@ def _async_save_vertex_memory(uid: str, memory_text: str):
         asyncio.set_event_loop(loop)
         loop.run_until_complete(_run())
         loop.close()
-        logger.info(f"Saved memory to Vertex AI Memory Bank for {uid}: {memory_text}")
+        logger.info(f"Saved memory to Vertex AI Memory Bank for {uid}: {clean_text}")
     except Exception as err:
         logger.warning(f"Vertex AI Memory Bank async save notice for {uid}: {err}")
 
 
 def save_user_memory(employee: str, memory_text: str) -> List[str]:
+    """Saves a user memory entry with active PII/PHI scrubbing to Firestore and Vertex AI Memory Bank.
+    
+    Args:
+        employee (str): Employee name or user ID.
+        memory_text (str): Memory text to sanitize and persist.
+        
+    Returns:
+        List[str]: Updated list of user memories for the employee.
+    """
     uid = normalize_user_id(employee)
+    clean_text = scrub_pii_medical_info(memory_text)
     mems = get_user_memories(uid)
-    if memory_text not in mems:
-        mems.append(memory_text)
+    if clean_text not in mems:
+        mems.append(clean_text)
 
     IN_MEMORY_MEMORIES[uid] = mems
 
@@ -251,14 +284,22 @@ def save_user_memory(employee: str, memory_text: str) -> List[str]:
 
     # Synchronously or in background save to Vertex AI Memory Bank
     try:
-        asyncio.create_task(asyncio.to_thread(_async_save_vertex_memory, uid, memory_text))
+        asyncio.create_task(asyncio.to_thread(_async_save_vertex_memory, uid, clean_text))
     except Exception:
-        _async_save_vertex_memory(uid, memory_text)
+        _async_save_vertex_memory(uid, clean_text)
 
     return mems
 
 
 def get_user_memories(employee: str) -> List[str]:
+    """Retrieves user memories stored for an employee.
+    
+    Args:
+        employee (str): Employee name or user ID.
+        
+    Returns:
+        List[str]: List of memory entries recorded for the employee.
+    """
     uid = normalize_user_id(employee)
     client = get_firestore_client()
     if client:
