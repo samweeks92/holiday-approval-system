@@ -389,6 +389,9 @@ async def serve_portal():
                                 <option value="alice">Alice Smith (alice)</option>
                                 <option value="bob">Bob Jones (bob)</option>
                                 <option value="charlie" selected>Charlie Brown (charlie)</option>
+                                <option value="denise">Denise Davis (denise)</option>
+                                <option value="edward">Edward Evans (edward)</option>
+                                <option value="flora">Flora Foster (flora)</option>
                             </select>
                         </div>
                     </div>
@@ -417,6 +420,9 @@ async def serve_portal():
                             <option value="alice">Alice Smith (alice)</option>
                             <option value="bob">Bob Jones (bob)</option>
                             <option value="charlie" selected>Charlie Brown (charlie)</option>
+                            <option value="denise">Denise Davis (denise)</option>
+                            <option value="edward">Edward Evans (edward)</option>
+                            <option value="flora">Flora Foster (flora)</option>
                         </select>
                     </div>
 

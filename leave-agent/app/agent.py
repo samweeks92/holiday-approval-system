@@ -53,8 +53,8 @@ MODEL = "gemini-2.5-flash"
 
 class VacationEvaluation(BaseModel):
     """Structured schema for classifying and evaluating vacation requests using LLM reasoning."""
-    employee: str = Field(description="Name or ID of the submitting employee (e.g. Alice Smith, Bob Jones, Charlie Brown).")
-    user_id: str = Field("charlie", description="Normalized user ID (alice, bob, charlie).")
+    employee: str = Field(description="Name or ID of the submitting employee (e.g. Alice Smith, Bob Jones, Charlie Brown, Denise Davis, Edward Evans, Flora Foster).")
+    user_id: str = Field("charlie", description="Normalized user ID (alice, bob, charlie, denise, edward, flora).")
     days: float = Field(0.0, description="Duration of leave requested in days.")
     start_date: str = Field("2026-06-01", description="Start date of requested leave.")
     reason: str = Field("Vacation", description="Destination or reason for vacation.")
@@ -66,7 +66,7 @@ class VacationEvaluation(BaseModel):
 
 # --- TOOLS ---
 def check_pto_balance(employee: str) -> str:
-    """Checks available annual PTO vacation balance and used days for an employee (alice, bob, charlie)."""
+    """Checks available annual PTO vacation balance and used days for an employee (alice, bob, charlie, denise, edward, flora)."""
     uid = normalize_user_id(employee)
     bal = get_employee_balance(uid)
     emp = bal.get("employee", uid.capitalize())

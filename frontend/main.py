@@ -88,7 +88,15 @@ async def refresh_pending_cache():
         pass
 
     # 2. Fetch from Agent Engine sessions
-    target_users = ["alice", "bob", "charlie", "vais-query-reasoning-engine", "default-user"]
+    target_users = ["alice", "bob", "charlie", "denise", "edward", "flora", "vais-query-reasoning-engine", "default-user"]
+    emp_map = {
+        "alice": "Alice Smith",
+        "bob": "Bob Jones",
+        "charlie": "Charlie Brown",
+        "denise": "Denise Davis",
+        "edward": "Edward Evans",
+        "flora": "Flora Foster",
+    }
     for user_id in target_users:
         try:
             sessions_resp = await session_service.list_sessions(app_name=AGENT_RUNTIME_ID, user_id=user_id)
@@ -110,7 +118,7 @@ async def refresh_pending_cache():
                     message = None
                     days = None
                     reason = None
-                    employee = "Alice Smith" if user_id == "alice" else ("Bob Jones" if user_id == "bob" else "Charlie Brown")
+                    employee = emp_map.get(user_id, user_id.capitalize())
 
                     for ev in session_obj.events:
                         if hasattr(ev, "actions") and ev.actions and hasattr(ev.actions, "state_delta"):

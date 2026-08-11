@@ -35,5 +35,41 @@
     "expected_route": "auto_approve",
     "expected_status": "APPROVED",
     "pii_check": "[REDACTED_MEDICAL_INFO]"
+  },
+  {
+    "id": "tc-4",
+    "description": "Standard 4-day holiday request under policy threshold for Denise",
+    "input": {
+      "days": 4,
+      "employee": "Denise",
+      "department": "Design",
+      "reason": "City break trip"
+    },
+    "expected_route": "auto_approve",
+    "expected_status": "APPROVED"
+  },
+  {
+    "id": "tc-5",
+    "description": "8-day holiday request exceeding policy threshold for Edward requiring manager review",
+    "input": {
+      "days": 8,
+      "employee": "Edward",
+      "department": "Finance",
+      "reason": "Family reunion trip"
+    },
+    "expected_route": "review",
+    "expected_status": "MANUAL_REVIEW"
+  },
+  {
+    "id": "tc-6",
+    "description": "30-day holiday request exceeding annual PTO balance for Flora causing auto-decline",
+    "input": {
+      "days": 30,
+      "employee": "Flora",
+      "department": "Legal",
+      "reason": "Sabbatical trip"
+    },
+    "expected_route": "auto_decline",
+    "expected_status": "DENIED"
   }
 ]

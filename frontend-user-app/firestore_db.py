@@ -21,17 +21,21 @@ INITIAL_USERS = {
     "alice": {"employee": "Alice Smith", "user_id": "alice", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
     "bob": {"employee": "Bob Jones", "user_id": "bob", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
     "charlie": {"employee": "Charlie Brown", "user_id": "charlie", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
+    "denise": {"employee": "Denise Davis", "user_id": "denise", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
+    "edward": {"employee": "Edward Evans", "user_id": "edward", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
+    "flora": {"employee": "Flora Foster", "user_id": "flora", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
 }
 
+ALL_USER_IDS = ["alice", "bob", "charlie", "denise", "edward", "flora"]
 IN_MEMORY_BALANCES: Dict[str, Dict[str, Any]] = {k: v.copy() for k, v in INITIAL_USERS.items()}
-IN_MEMORY_MEMORIES: Dict[str, List[str]] = {"alice": [], "bob": [], "charlie": []}
+IN_MEMORY_MEMORIES: Dict[str, List[str]] = {k: [] for k in ALL_USER_IDS}
 
 
 def get_firestore_client() -> Optional[firestore.Client]:
     try:
         return firestore.Client(project=PROJECT_ID, database=DATABASE_NAME)
     except Exception as err:
-        logger.warning(f"Firestore client init fallback (holiday-data): {err}")
+        logger.warning(f"Firestore client init error (holiday-data): {err}")
         return None
 
 
@@ -39,10 +43,9 @@ def normalize_user_id(employee_str: str) -> str:
     if not employee_str:
         return "alice"
     clean = str(employee_str).strip().lower()
-    if "bob" in clean:
-        return "bob"
-    if "charlie" in clean:
-        return "charlie"
+    for uid in ALL_USER_IDS:
+        if uid in clean:
+            return uid
     return "alice"
 
 
@@ -83,9 +86,9 @@ def get_all_balances() -> List[Dict[str, Any]]:
         except Exception as err:
             logger.warning(f"Firestore get_all_balances error: {err}")
 
-    for uid in ["alice", "bob", "charlie"]:
+    for uid in ALL_USER_IDS:
         get_employee_balance(uid)
-    return [IN_MEMORY_BALANCES[uid] for uid in ["alice", "bob", "charlie"]]
+    return [IN_MEMORY_BALANCES[uid] for uid in ALL_USER_IDS]
 
 
 def record_pending_vacation(employee: str, days: float, reason: str, start_date: str = "2026-06-01") -> Dict[str, Any]:
