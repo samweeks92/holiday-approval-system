@@ -18,7 +18,6 @@ from google.cloud import pubsub_v1
 from firestore_db import (
     get_all_balances,
     get_employee_balance,
-    get_user_memories,
     normalize_user_id,
     record_pending_vacation,
 )
@@ -55,36 +54,6 @@ def get_auth_headers() -> Dict[str, str]:
     }
 
 
-def fetch_vertex_memories(user_id: str) -> List[str]:
-    try:
-        from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankService
-        clean_id = AGENT_ENGINE_ID.split("/")[-1]
-        mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=clean_id)
-
-        async def _search():
-            res = await mb.search_memory(app_name=clean_id, user_id=user_id, query="vacation trip destination")
-            mems = []
-            if hasattr(res, "memories") and res.memories:
-                for entry in res.memories:
-                    content = getattr(entry, "content", None)
-                    if content and hasattr(content, "parts"):
-                        for p in content.parts:
-                            if hasattr(p, "text") and p.text:
-                                mems.append(p.text)
-            return mems
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        mems = loop.run_until_complete(_search())
-        loop.close()
-        if mems:
-            return mems
-    except Exception:
-        pass
-
-    return get_user_memories(user_id)
-
-
 def publish_to_pubsub(user_id: str, employee_name: str, days: float, start_date: str, reason: str):
     publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(PROJECT_ID, PUBSUB_TOPIC_NAME)
@@ -119,11 +88,9 @@ def publish_to_pubsub(user_id: str, employee_name: str, days: float, start_date:
 async def get_user_data(user_id: str):
     uid = normalize_user_id(user_id)
     balance_data = get_employee_balance(uid)
-    vertex_memories = fetch_vertex_memories(uid)
     return {
         "status": "success",
-        "data": balance_data,
-        "vertex_memories": vertex_memories
+        "data": balance_data
     }
 
 
@@ -164,17 +131,16 @@ async def chat_with_agent(req: ChatRequest):
                                 agent_reply += part["text"] + "\n"
                 except json.JSONDecodeError:
                     continue
-
-        vertex_memories = fetch_vertex_memories(uid)
+        else:
+            agent_reply = f"⚠️ Agent Engine notice ({resp.status_code}): {resp.text[:200]}"
 
         if not agent_reply.strip():
-            agent_reply = f"Hello {uid.capitalize()}! I am LeaveFlow AI. How can I help you with your holiday requests today?"
+            agent_reply = f"Hi {uid.capitalize()}! Message received by LeaveFlow AI."
 
         return {
             "status": "success",
             "session_id": sid,
-            "reply": agent_reply.strip(),
-            "vertex_memories": vertex_memories
+            "reply": agent_reply.strip()
         }
     except Exception as err:
         raise HTTPException(status_code=500, detail=str(err))
@@ -204,14 +170,11 @@ async def book_holiday(req: BookHolidayRequest):
     except Exception as err:
         print(f"PubSub publish notice: {err}")
 
-    vertex_memories = fetch_vertex_memories(uid)
-
     return {
         "status": "success",
         "message": "Holiday request submitted! Status set to PENDING.",
         "pubsub_message_id": pubsub_msg_id,
-        "record": updated_record,
-        "vertex_memories": vertex_memories
+        "record": updated_record
     }
 
 
@@ -287,7 +250,7 @@ async def serve_portal():
         }
 
         .chat-box {
-            height: 380px;
+            height: 420px;
             overflow-y: auto;
             border: 1px solid var(--border-light);
             border-radius: 16px;
@@ -361,26 +324,6 @@ async def serve_portal():
 
         .btn-new-chat:hover { background: var(--ocean-light); color: var(--primary-blue); }
 
-        .memory-section {
-            background: #f0f9ff;
-            border: 1px solid #bae6fd;
-            border-radius: 14px;
-            padding: 16px;
-            margin-top: 16px;
-        }
-
-        .memory-tag {
-            background: #ffffff;
-            color: var(--primary-blue);
-            border: 1px solid #7dd3fc;
-            padding: 6px 12px;
-            border-radius: 9999px;
-            font-size: 12px;
-            font-weight: 600;
-            display: inline-block;
-            margin: 4px;
-        }
-
         .balance-pill {
             background: var(--ocean-light);
             color: var(--primary-blue);
@@ -452,23 +395,13 @@ async def serve_portal():
 
                     <div class="chat-box" id="chat-stream">
                         <div class="msg-bubble msg-agent">
-                            🤖 Hi! I am LeaveFlow AI. Type a message or greeting to start chatting!
+                            🤖 Hi! I am LeaveFlow AI. Say hi to start chatting!
                         </div>
                     </div>
 
                     <div class="chat-input-row">
                         <input type="text" id="chat-input" placeholder="e.g. Hi! Can you help me book another holiday to Spain?" onkeypress="if(event.key==='Enter') sendChat()">
                         <button class="btn-send" onclick="sendChat()">Send Message</button>
-                    </div>
-
-                    <!-- Vertex AI Memory Bank Section -->
-                    <div class="memory-section">
-                        <div style="font-size: 13px; font-weight: 700; color: var(--primary-blue); margin-bottom: 8px;">
-                            🧠 Vertex AI Memory Bank (Managed Agent Engine State)
-                        </div>
-                        <div id="memory-tags-container">
-                            <span style="font-size: 12px; color: var(--text-muted);">Retrieving Vertex AI memories for user...</span>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -579,21 +512,10 @@ async def serve_portal():
                     const rem = data.data.remaining_balance !== undefined ? data.data.remaining_balance : 25.0;
                     document.getElementById('balance-display').innerText = rem + ' Days';
                     renderHistory(data.data.history || []);
-                    renderMemories(data.vertex_memories || []);
                 }
             } catch (err) {
                 console.error('Error loading user data:', err);
             }
-        }
-
-        function renderMemories(memories) {
-            const container = document.getElementById('memory-tags-container');
-            if (!memories || memories.length === 0) {
-                container.innerHTML = '<span style="font-size: 12px; color: var(--text-muted);">No Vertex AI memories stored for ' + currentUserId + ' yet. Memories are saved automatically upon booking.</span>';
-                return;
-            }
-
-            container.innerHTML = memories.map(m => '<span class="memory-tag">📌 ' + m + '</span>').join('');
         }
 
         function renderHistory(history) {
@@ -633,9 +555,8 @@ async def serve_portal():
                 const data = await res.json();
                 if (data.status === 'success' && data.reply) {
                     chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 ' + data.reply.replace(/\\n/g, '<br>') + '</div>';
-                    renderMemories(data.vertex_memories || []);
                 } else {
-                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 Request received and processed by LeaveFlow AI.</div>';
+                    chatStream.innerHTML += '<div class="msg-bubble msg-agent">🤖 Message processed by LeaveFlow AI.</div>';
                 }
                 chatStream.scrollTop = chatStream.scrollHeight;
                 loadUserData();
@@ -667,7 +588,7 @@ async def serve_portal():
 
                 const data = await res.json();
                 if (data.status === 'success') {
-                    alert('✅ Holiday request submitted! Status set to PENDING and memory saved to Vertex AI Memory Bank.');
+                    alert('✅ Holiday request submitted! Status set to PENDING.');
                     loadUserData();
                 } else {
                     alert('Submission error: ' + (data.detail || 'Failed'));
@@ -678,7 +599,6 @@ async def serve_portal():
         }
 
         loadUserData();
-        setInterval(loadUserData, 4000);
     </script>
 </body>
 </html>"""

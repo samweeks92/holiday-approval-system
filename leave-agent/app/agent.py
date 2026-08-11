@@ -44,7 +44,7 @@ PROJECT_ID = os.environ.get("PROJECT_ID", "ai-sandbox-sw")
 LOCATION = os.environ.get("LOCATION", "europe-west1")
 AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "6128897715548979200").split("/")[-1]
 
-FLASH_MODEL = Gemini(model="gemini-3.5-flash")
+FLASH_MODEL = Gemini(model="gemini-2.5-flash")
 
 
 def check_pto_balance(employee: str) -> str:
@@ -58,13 +58,14 @@ def check_pto_balance(employee: str) -> str:
 
 
 def retrieve_user_memories(employee: str) -> str:
-    """Retrieves previous vacation notes, trips, and memories stored in Vertex AI Memory Bank for an employee."""
+    """Retrieves previous vacation notes, trips, and memories stored natively in Vertex AI Memory Bank for an employee."""
     uid = normalize_user_id(employee)
+    mems = []
+
     try:
         mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
         async def _search():
             res = await mb.search_memory(app_name=AGENT_ENGINE_ID, user_id=uid, query="vacation trip destination")
-            mems = []
             if hasattr(res, "memories") and res.memories:
                 for entry in res.memories:
                     content = getattr(entry, "content", None)
@@ -72,22 +73,22 @@ def retrieve_user_memories(employee: str) -> str:
                         for p in content.parts:
                             if hasattr(p, "text") and p.text:
                                 mems.append(p.text)
-            return mems
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        mems = loop.run_until_complete(_search())
+        loop.run_until_complete(_search())
         loop.close()
-        if mems:
-            return f"Memories retrieved for {uid}: " + "; ".join(mems)
     except Exception as e:
         logger.warning(f"Memory Bank search notice for {uid}: {e}")
 
-    return f"No previous memories stored for {uid} yet."
+    if mems:
+        return f"Vertex AI Memories for {uid}: " + "; ".join(mems)
+
+    return f"No previous memories stored in Vertex AI Memory Bank for {uid} yet."
 
 
 def save_vacation_memory(employee: str, memory_text: str) -> str:
-    """Saves a vacation trip or destination memory entry directly to Vertex AI Memory Bank."""
+    """Saves a vacation trip memory entry directly to Vertex AI Memory Bank."""
     uid = normalize_user_id(employee)
     try:
         mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
@@ -99,9 +100,9 @@ def save_vacation_memory(employee: str, memory_text: str) -> str:
         asyncio.set_event_loop(loop)
         loop.run_until_complete(_save())
         loop.close()
-        return f"Successfully saved memory for {uid}: '{memory_text}'"
+        return f"Successfully saved memory to Vertex AI Memory Bank for {uid}: '{memory_text}'"
     except Exception as e:
-        return f"Failed to save memory: {e}"
+        return f"Vertex AI Memory save notice for {uid}: {e}"
 
 
 def submit_holiday_request(employee: str, days: float, start_date: str, reason: str) -> str:
@@ -132,9 +133,9 @@ You are LeaveFlow AI, an AI holiday assistant for company employees (Alice Smith
 You speak naturally, warmly, and helpfully like a human HR colleague.
 
 Key Instructions:
-1. When an employee greets you (e.g. "hi", "hello", "hey"):
-   - ALWAYS call `retrieve_user_memories(employee)` first to check their past vacation memories.
-   - Greet them warmly and reference their past trip or memory naturally (e.g., "Hey Charlie! Welcome back! How was your trip to Spain?").
+1. At the very beginning of a session or when an employee first greets you / tells you who they are (e.g. "hi", "hello", "alice", "charlie"):
+   - ALWAYS call `retrieve_user_memories(employee)` as the FIRST thing you do to check their past vacation memories in Vertex AI Memory Bank.
+   - Greet them warmly by name and reference their past trip or memory naturally if found (e.g., "Hey Alice! Welcome back! How was your vacation to Malaga?").
 2. When an employee asks to book a vacation or mentions a new trip:
    - If travel dates, duration in days, or destination/reason are missing, ask for them naturally (e.g., "Sure, I can help with that! What dates are you planning to travel and how many days?").
    - Call `check_pto_balance(employee)` to verify available balance.
@@ -145,7 +146,7 @@ Key Instructions:
 
 root_agent = Agent(
     name="leave_approval_agent",
-    description="Autonomous human-like Leave Approval Agent with PTO balance validation and Vertex AI Memory Bank.",
+    description="Autonomous human-like Leave Approval Agent with PTO balance validation and native Vertex AI Memory Bank.",
     model=FLASH_MODEL,
     instruction=SYSTEM_INSTRUCTION,
     tools=[check_pto_balance, retrieve_user_memories, save_vacation_memory, submit_holiday_request]
