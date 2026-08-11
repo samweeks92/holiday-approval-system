@@ -139,39 +139,43 @@ class SummarizeOutput(BaseModel):
 
 # --- TOOLS WITH GUIDED ERROR HANDLING & DOCSTRINGS ---
 
-def check_pto_balance(employee: str) -> str:
+def check_pto_balance(tool_context: ToolContext, employee: str = None) -> str:
     """Checks available annual PTO vacation balance and used days for an employee.
     
     Args:
-        employee (str): Name or user ID of the employee (alice, bob, charlie, denise, edward, flora).
+        tool_context (ToolContext): ADK tool invocation context containing session user_id.
+        employee (str, optional): Name or user ID of the employee (alice, bob, charlie, denise, edward, flora). If omitted, uses session user_id.
         
     Returns:
         str: Human-readable summary of remaining and used PTO days.
     """
-    with capture_trajectory(f"Check PTO balance for employee '{employee}'", "check_pto_balance"):
+    target_user = employee or tool_context.user_id or "alice"
+    with capture_trajectory(f"Check PTO balance for employee '{target_user}'", "check_pto_balance"):
         try:
-            uid = normalize_user_id(employee)
+            uid = normalize_user_id(target_user)
             bal = get_employee_balance(uid)
             emp = bal.get("employee", uid.capitalize())
             rem = bal.get("remaining_balance", 25.0)
             used = bal.get("used_days", 0.0)
             return f"{emp} ({uid}) currently has {rem} days remaining PTO balance (out of 25.0 days starting allowance). Used days: {used}."
         except Exception as err:
-            return f"Guided Error Recovery: Unable to check PTO balance for '{employee}' (Details: {err}). Please confirm the employee name and try again."
+            return f"Guided Error Recovery: Unable to check PTO balance for '{target_user}' (Details: {err}). Please confirm the employee name and try again."
 
 
-async def retrieve_user_memories(employee: str) -> str:
+async def retrieve_user_memories(tool_context: ToolContext, employee: str = None) -> str:
     """Retrieves previous vacation notes, trips, and memories stored natively in Vertex AI Memory Bank for an employee.
     
     Args:
-        employee (str): Name or user ID of the employee.
+        tool_context (ToolContext): ADK tool invocation context containing session user_id.
+        employee (str, optional): Name or user ID of the employee. If omitted, uses session user_id.
         
     Returns:
         str: Consolidated past memories found for the employee.
     """
-    with capture_trajectory(f"Retrieve past vacation memories for employee '{employee}'", "retrieve_user_memories"):
+    target_user = employee or tool_context.user_id or "alice"
+    with capture_trajectory(f"Retrieve past vacation memories for employee '{target_user}'", "retrieve_user_memories"):
         try:
-            uid = normalize_user_id(employee)
+            uid = normalize_user_id(target_user)
             mems = []
             mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=AGENT_ENGINE_ID)
             res = await mb.search_memory(app_name=AGENT_ENGINE_ID, user_id=uid, query="vacation trip destination")
@@ -186,7 +190,7 @@ async def retrieve_user_memories(employee: str) -> str:
                 return f"Vertex AI Memories for {uid}: " + "; ".join(mems)
             return f"No previous memories stored in Vertex AI Memory Bank for {uid} yet."
         except Exception as err:
-            return f"Guided Error Recovery: Memory Bank retrieval notice for '{employee}' (Details: {err}). Proceeding with standard conversation."
+            return f"Guided Error Recovery: Memory Bank retrieval notice for '{target_user}' (Details: {err}). Proceeding with standard conversation."
 
 
 async def save_vacation_memory(employee: str, memory_text: str) -> str:
@@ -223,7 +227,7 @@ def save_vacation_details(
 
     Args:
         tool_context (ToolContext): ADK tool invocation context.
-        employee (str, optional): Employee name or user ID.
+        employee (str, optional): Employee name or user ID. If omitted, uses tool_context.user_id.
         remaining_balance (float, optional): Remaining PTO balance in days.
         requested_days (float, optional): Duration of vacation requested in days.
         reason (str, optional): Destination or reason for vacation (sanitized for PII).
@@ -232,11 +236,12 @@ def save_vacation_details(
     Returns:
         Dict[str, Any]: Status payload indicating success or recovery instructions.
     """
-    with capture_trajectory(f"Save vacation details to state for '{employee}'", "save_vacation_details"):
+    emp_val = employee or tool_context.user_id or "alice"
+    with capture_trajectory(f"Save vacation details to state for '{emp_val}'", "save_vacation_details"):
         try:
             clean_reason = scrub_pii_medical_info(reason) if reason else None
             vacation_details = {
-                "employee": employee,
+                "employee": emp_val,
                 "remaining_balance": remaining_balance,
                 "requested_days": requested_days,
                 "reason": clean_reason,
@@ -343,7 +348,7 @@ async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, Non
     vacation_details = ctx.state.get("vacation_details") or {}
     req_dict = node_input if isinstance(node_input, dict) else (node_input.model_dump() if isinstance(node_input, VacationEvaluation) else {})
 
-    raw_emp = vacation_details.get("employee") or req_dict.get("employee") or "Denise"
+    raw_emp = vacation_details.get("employee") or req_dict.get("employee") or ctx.user_id or "Denise"
     uid = normalize_user_id(raw_emp)
     emp_name = raw_emp.capitalize() if uid in ["alice", "bob", "charlie", "denise", "edward", "flora"] else raw_emp
 
@@ -426,14 +431,24 @@ GREETER_CONSTITUTION = (
     "=== LEAVEFLOW AI SYSTEM CONSTITUTION ===\n\n"
     "1. PERSONA & IDENTITY:\n"
     "   You are LeaveFlow AI, a warm, friendly, empathetic, human-like AI holiday assistant.\n\n"
-    "2. DOMAIN KNOWLEDGE & PTO POLICIES:\n"
+    "2. CRITICAL IDENTITY RULE (NEVER ASK FOR USER NAME):\n"
+    "   - You ALREADY know the employee's name from session user_id:\n"
+    "     * alice -> Alice Smith\n"
+    "     * bob -> Bob Jones\n"
+    "     * charlie -> Charlie Brown\n"
+    "     * denise -> Denise Davis\n"
+    "     * edward -> Edward Evans\n"
+    "     * flora -> Flora Foster\n"
+    "   - NEVER ask the user for their name, user ID, or identity under any circumstances!\n"
+    "   - Always greet them immediately by their first name (e.g., 'Hi Denise!').\n\n"
+    "3. DOMAIN KNOWLEDGE & PTO POLICIES:\n"
     "   - Annual PTO Starting Allowance: 25.0 days for all employees.\n"
     "   - Instant Auto-Approval Policy: Requests <= 5.0 days within PTO balance are eligible for instant approval.\n"
     "   - Manager Review Policy: Requests > 5.0 days require manager approval via Human-in-the-Loop review.\n"
     "   - Auto-Decline Policy: Requests exceeding available PTO balance are auto-declined.\n\n"
-    "3. PROTOCOL & WORKFLOW STEPS:\n"
-    "   Step 1: Always call `retrieve_user_memories(employee)` and `check_pto_balance(employee)`.\n"
-    "   Step 2: Greet the employee warmly by name. If past memories are found (e.g. Malaga, Rome, Spain, Cambridge), naturally ask about their trip like a caring colleague.\n"
+    "4. PROTOCOL & WORKFLOW STEPS:\n"
+    "   Step 1: Always call `retrieve_user_memories()` and `check_pto_balance()` without needing to ask the user.\n"
+    "   Step 2: Greet the employee warmly by name (e.g. 'Hi Denise!'). If past memories are found (e.g. Malaga, Rome, Spain, Cambridge), naturally ask about their trip like a caring colleague.\n"
     "   Step 3: Collect all details for the new vacation request: duration in days, start date, and reason/destination.\n"
     "   Step 4: Once all details are collected, call `save_vacation_details(tool_context, employee, remaining_balance, requested_days, reason, start_date)` to record details in session state."
 )
