@@ -1,17 +1,21 @@
 # Copyright 2026 Google LLC
-# Firestore Database Helper for LeaveFlow AI Vacation Management (User App)
+# Firestore & Vertex AI Memory Bank Helper for LeaveFlow AI Vacation Management (User App)
 
+import asyncio
 import datetime
 import logging
 import os
 import uuid
 from typing import Any, Dict, List, Optional
 from google.cloud import firestore
+from google.genai import types
 
 logger = logging.getLogger("firestore_db_user_app")
 
 PROJECT_ID = os.environ.get("PROJECT_ID", "ai-sandbox-sw")
+LOCATION = os.environ.get("LOCATION", "europe-west1")
 DATABASE_NAME = os.environ.get("FIRESTORE_DATABASE", "holiday-data")
+AGENT_ENGINE_ID = os.environ.get("AGENT_ENGINE_ID", "6128897715548979200")
 
 INITIAL_USERS = {
     "alice": {"employee": "Alice Smith", "user_id": "alice", "starting_balance": 25.0, "used_days": 0.0, "remaining_balance": 25.0, "history": []},
@@ -110,4 +114,70 @@ def record_pending_vacation(employee: str, days: float, reason: str, start_date:
         except Exception as err:
             logger.warning(f"Firestore pending update error for {uid}: {err}")
 
+    # Also save memory to Vertex AI Agent Engine Memory Bank
+    save_user_memory(employee, f"{uid.capitalize()} requested {days} days vacation for {reason}")
+
     return curr_data
+
+
+def _async_save_vertex_memory(uid: str, memory_text: str):
+    """Background task to save memory to Vertex AI Agent Engine Memory Bank."""
+    try:
+        from google.adk.memory.vertex_ai_memory_bank_service import VertexAiMemoryBankService
+        from google.adk.memory.memory_entry import MemoryEntry
+
+        clean_engine_id = AGENT_ENGINE_ID.split("/")[-1]
+        mb = VertexAiMemoryBankService(project=PROJECT_ID, location=LOCATION, agent_engine_id=clean_engine_id)
+
+        content = types.Content(role="user", parts=[types.Part.from_text(text=memory_text)])
+        entry = MemoryEntry(content=content)
+
+        async def _run():
+            await mb.add_memory(app_name=clean_engine_id, user_id=uid, memories=[entry])
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_run())
+        loop.close()
+        logger.info(f"Saved memory to Vertex AI Memory Bank for {uid}: {memory_text}")
+    except Exception as err:
+        logger.warning(f"Vertex AI Memory Bank async save notice for {uid}: {err}")
+
+
+def save_user_memory(employee: str, memory_text: str) -> List[str]:
+    uid = normalize_user_id(employee)
+    mems = get_user_memories(uid)
+    if memory_text not in mems:
+        mems.append(memory_text)
+
+    IN_MEMORY_MEMORIES[uid] = mems
+
+    client = get_firestore_client()
+    if client:
+        try:
+            client.collection("user_memories").document(uid).set({"memories": mems})
+        except Exception as err:
+            logger.warning(f"Firestore memory save error for {uid}: {err}")
+
+    try:
+        asyncio.create_task(asyncio.to_thread(_async_save_vertex_memory, uid, memory_text))
+    except Exception:
+        _async_save_vertex_memory(uid, memory_text)
+
+    return mems
+
+
+def get_user_memories(employee: str) -> List[str]:
+    uid = normalize_user_id(employee)
+    client = get_firestore_client()
+    if client:
+        try:
+            snapshot = client.collection("user_memories").document(uid).get()
+            if snapshot.exists:
+                mems = snapshot.to_dict().get("memories", [])
+                IN_MEMORY_MEMORIES[uid] = mems
+                return mems
+        except Exception as err:
+            logger.warning(f"Firestore get memories error for {uid}: {err}")
+
+    return IN_MEMORY_MEMORIES.get(uid, [])
