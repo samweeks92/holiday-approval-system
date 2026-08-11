@@ -116,6 +116,12 @@ resource "google_project_iam_member" "frontend-sa-aiplatform-admin-role" {
   member  = "serviceAccount:${google_service_account.frontend-service-account.email}"
 }
 
+resource "google_project_iam_member" "frontend-sa-datastore-user" {
+  project = var.project
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.frontend-service-account.email}"
+}
+
 resource "google_service_account_iam_member" "custom-cloud-run-sa-act-as-cloud-run-sa-frontend" {
   service_account_id = google_service_account.frontend-service-account.name
   role               = "roles/iam.serviceAccountUser"

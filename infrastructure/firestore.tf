@@ -12,17 +12,7 @@ resource "google_firestore_database" "holiday_data" {
   ]
 }
 
-# Grant Datastore/Firestore User role to project service accounts for database access
-resource "google_project_iam_member" "firestore_user_frontend" {
-  project = var.project
-  role    = "roles/datastore.user"
-  member  = "serviceAccount:holiday-holiday-frontend-sa@${var.project}.iam.gserviceaccount.com"
-
-  depends_on = [
-    module.frontend
-  ]
-}
-
+# Grant Datastore/Firestore User role to Agent Runtime service account for database access
 resource "google_project_iam_member" "firestore_user_agent" {
   project = var.project
   role    = "roles/datastore.user"
