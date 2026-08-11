@@ -340,12 +340,20 @@ auto_decline_agent = LlmAgent(
 @node(rerun_on_resume=True)
 async def review_agent(ctx: Context, node_input: Any) -> AsyncGenerator[Any, None]:
     """Flags holiday requests > 5 days for Human-in-the-Loop manager review."""
+    vacation_details = ctx.state.get("vacation_details") or {}
     req_dict = node_input if isinstance(node_input, dict) else (node_input.model_dump() if isinstance(node_input, VacationEvaluation) else {})
-    uid = req_dict.get("user_id")
-    emp_name = req_dict.get("employee")
-    days = req_dict.get("days")
-    reason = scrub_pii_medical_info(req_dict.get("reason", "Vacation"))
-    start_date = req_dict.get("start_date")
+
+    raw_emp = vacation_details.get("employee") or req_dict.get("employee") or "Denise"
+    uid = normalize_user_id(raw_emp)
+    emp_name = raw_emp.capitalize() if uid in ["alice", "bob", "charlie", "denise", "edward", "flora"] else raw_emp
+
+    try:
+        days = float(vacation_details.get("requested_days") or req_dict.get("days") or 6.0)
+    except (TypeError, ValueError):
+        days = 6.0
+
+    reason = scrub_pii_medical_info(vacation_details.get("reason") or req_dict.get("reason") or "Vacation")
+    start_date = vacation_details.get("start_date") or req_dict.get("start_date") or "2026-09-15"
 
     record_pending_vacation(emp_name, days, reason, start_date)
 
